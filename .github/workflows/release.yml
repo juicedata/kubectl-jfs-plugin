@@ -24,8 +24,6 @@ jobs:
           REVISIONDATE=$(git log -1 --pretty=format:'%cd' --date short 2>/dev/null) 
           echo "REVISIONDATE=${REVISIONDATE}" >> $GITHUB_ENV
 
-      - name: goreleaser release
-        run: make release
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
