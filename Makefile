@@ -17,6 +17,7 @@ GIT_BRANCH?=$(shell git rev-parse --abbrev-ref HEAD)
 GIT_COMMIT?=$(shell git rev-parse HEAD)
 DEV_TAG=dev-$(shell git describe --always --dirty)
 BUILD_DATE?=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+REVISIONDATE:=$(shell git log -1 --pretty=format:'%cd' --date short 2>/dev/null)
 GO111MODULE=on
 
 .PHONY: build

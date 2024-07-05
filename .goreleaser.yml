@@ -1,0 +1,49 @@
+project_name: kubectl-jfs-plugin
+env:
+  - GO111MODULE=on
+  - CGO_ENABLED=0
+  - REVISIONDATE={{ .Env.REVISIONDATE }}
+before:
+  hooks:
+    - go mod download
+builds:
+  - id: kubectl-jfs-linux-amd64
+    ldflags: -s -w -X github.com/juicedata/kubectl-jfs-plugin/pkg.version={{.Version}} -X github.com/juicedata/kubectl-jfs-plugin/pkg.gitCommit={{.ShortCommit}} -X github.com/juicedata/kubectl-jfs-plugin/pkg.buildDate={{.Env.REVISIONDATE}}
+    main: .
+    goos:
+      - linux
+    goarch:
+      - amd64
+  - id: kubectl-jfs-linux-arm64
+    ldflags: -s -w -X github.com/juicedata/kubectl-jfs-plugin/pkg.version={{.Version}} -X github.com/juicedata/kubectl-jfs-plugin/pkg.gitCommit={{.ShortCommit}} -X github.com/juicedata/kubectl-jfs-plugin/pkg.buildDate={{.Env.REVISIONDATE}}
+    main: .
+    goos:
+      - linux
+    goarch:
+      - arm64
+  - id: kubectl-jfs-darwin-amd64
+    ldflags: -s -w -X github.com/juicedata/kubectl-jfs-plugin/pkg.version={{.Version}} -X github.com/juicedata/kubectl-jfs-plugin/pkg.gitCommit={{.ShortCommit}} -X github.com/juicedata/kubectl-jfs-plugin/pkg.buildDate={{.Env.REVISIONDATE}}
+    main: .
+    goos:
+      - darwin
+    goarch:
+      - amd64
+  - id: kubectl-jfs-darwin-arm64
+    ldflags: -s -w -X github.com/juicedata/kubectl-jfs-plugin/pkg.version={{.Version}} -X github.com/juicedata/kubectl-jfs-plugin/pkg.gitCommit={{.ShortCommit}} -X github.com/juicedata/kubectl-jfs-plugin/pkg.buildDate={{.Env.REVISIONDATE}}
+    main: .
+    goos:
+      - darwin
+    goarch:
+      - arm64
+checksum:
+  name_template: 'checksums.txt'
+snapshot:
+  name_template: "{{ .Tag }}-next"
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+archives:
+  - name_template: "{{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
