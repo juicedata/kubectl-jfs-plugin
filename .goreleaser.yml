@@ -9,28 +9,28 @@ before:
 builds:
   - id: kubectl-jfs-linux-amd64
     ldflags: -s -w -X github.com/juicedata/kubectl-jfs-plugin/pkg.version={{.Version}} -X github.com/juicedata/kubectl-jfs-plugin/pkg.gitCommit={{.ShortCommit}} -X github.com/juicedata/kubectl-jfs-plugin/pkg.buildDate={{.Env.REVISIONDATE}}
-    main: .
+    main: ./cmd
     goos:
       - linux
     goarch:
       - amd64
   - id: kubectl-jfs-linux-arm64
     ldflags: -s -w -X github.com/juicedata/kubectl-jfs-plugin/pkg.version={{.Version}} -X github.com/juicedata/kubectl-jfs-plugin/pkg.gitCommit={{.ShortCommit}} -X github.com/juicedata/kubectl-jfs-plugin/pkg.buildDate={{.Env.REVISIONDATE}}
-    main: .
+    main: ./cmd
     goos:
       - linux
     goarch:
       - arm64
   - id: kubectl-jfs-darwin-amd64
     ldflags: -s -w -X github.com/juicedata/kubectl-jfs-plugin/pkg.version={{.Version}} -X github.com/juicedata/kubectl-jfs-plugin/pkg.gitCommit={{.ShortCommit}} -X github.com/juicedata/kubectl-jfs-plugin/pkg.buildDate={{.Env.REVISIONDATE}}
-    main: .
+    main: ./cmd
     goos:
       - darwin
     goarch:
       - amd64
   - id: kubectl-jfs-darwin-arm64
     ldflags: -s -w -X github.com/juicedata/kubectl-jfs-plugin/pkg.version={{.Version}} -X github.com/juicedata/kubectl-jfs-plugin/pkg.gitCommit={{.ShortCommit}} -X github.com/juicedata/kubectl-jfs-plugin/pkg.buildDate={{.Env.REVISIONDATE}}
-    main: .
+    main: ./cmd
     goos:
       - darwin
     goarch:
