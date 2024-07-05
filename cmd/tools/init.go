@@ -21,16 +21,16 @@ import (
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 
 	"github.com/juicedata/kubectl-jfs-plugin/pkg"
+	"github.com/juicedata/kubectl-jfs-plugin/pkg/config"
 )
 
 var (
 	KubernetesConfigFlags *genericclioptions.ConfigFlags
-	MountNamespace        string
 )
 
 func init() {
 	KubernetesConfigFlags = genericclioptions.NewConfigFlags(true)
-	RootCmd.PersistentFlags().StringVarP(&MountNamespace, "mount-namespace", "m", "kube-system", "namespace of juicefs csi driver")
+	RootCmd.PersistentFlags().StringVarP(&config.MountNamespace, "mount-namespace", "m", "kube-system", "namespace of juicefs csi driver")
 	KubernetesConfigFlags.AddFlags(RootCmd.PersistentFlags())
 }
 
