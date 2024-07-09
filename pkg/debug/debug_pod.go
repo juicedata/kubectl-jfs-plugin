@@ -206,7 +206,7 @@ func (p *podDescribe) debugRunningPod() *podDescribe {
 			p.failedf("CSI node not found on node [%s], please check if there are taints on node.", p.node)
 		}
 		if p.csiNodePod != nil && !util.IsPodReady(p.csiNodePod) {
-			p.failedf("CSI node [%s] is not ready.", p.node)
+			p.failedf("CSI node [%s] is not ready.", p.csiNode.name)
 		}
 
 		// 5. mount pod not ready
@@ -239,7 +239,7 @@ func (p *podDescribe) debugTerminatingPod() *podDescribe {
 			p.failedf("CSI node not found on node [%s], please check if there are taints on node.", p.node)
 		}
 		if !util.IsPodReady(p.csiNodePod) {
-			p.failedf("CSI node [%s] is not ready.", p.node)
+			p.failedf("CSI node [%s] is not ready.", p.csiNode.name)
 		}
 
 		// 3. mount pod not terminating or contain pod uid
@@ -286,7 +286,7 @@ func (p *podDescribe) describe() (string, error) {
 		if p.csiNode != nil {
 			w.Write(kdescribe.LEVEL_1, "Name:\t%s\n", p.csiNode.name)
 			w.Write(kdescribe.LEVEL_1, "Namespace:\t%s\n", p.csiNode.namespace)
-			w.Write(kdescribe.LEVEL_1, "Status:\t%s\n", p.node.status)
+			w.Write(kdescribe.LEVEL_1, "Status:\t%s\n", p.csiNode.status)
 		}
 
 		w.Write(kdescribe.LEVEL_0, "PVCs: \n")
