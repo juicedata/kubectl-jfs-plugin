@@ -134,7 +134,7 @@ func (aa *AppAnalyzer) JfsPod() error {
 	}
 
 	if len(appPods) == 0 {
-		fmt.Printf("No pod found using juicefs PVC in %s namespace.", aa.ns)
+		fmt.Printf("No pod found using juicefs PVC in %s namespace.\n", aa.ns)
 		return nil
 	}
 
