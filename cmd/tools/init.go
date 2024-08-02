@@ -31,6 +31,7 @@ var (
 func init() {
 	KubernetesConfigFlags = genericclioptions.NewConfigFlags(true)
 	RootCmd.PersistentFlags().StringVarP(&config.MountNamespace, "mount-namespace", "m", "kube-system", "namespace of juicefs csi driver")
+	RootCmd.PersistentFlags().BoolVarP(&config.AllNamespaces, "all-namespaces", "A", config.AllNamespaces, "If present, list the requested object(s) across all namespaces. Namespace in current context is ignored even if specified with --namespace.")
 	KubernetesConfigFlags.AddFlags(RootCmd.PersistentFlags())
 }
 

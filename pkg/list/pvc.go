@@ -133,9 +133,9 @@ func (pa *PVCAnalyzer) ListPVC() error {
 func (pa *PVCAnalyzer) printPVCs() (string, error) {
 	return util.TabbedString(func(out io.Writer) error {
 		w := kdescribe.NewPrefixWriter(out)
-		w.Write(kdescribe.LEVEL_0, "NAME\tVOLUME\tSTORAGECLASS\tSTATUS\tAGE\n")
+		w.Write(kdescribe.LEVEL_0, "NAME\tNAMESPACE\tVOLUME\tSTORAGECLASS\tSTATUS\tAGE\n")
 		for _, pvc := range pa.pvcShows {
-			w.Write(kdescribe.LEVEL_0, "%s\t%s\t%s\t%s\t%s\n", pvc.name, pvc.pv, pvc.sc, pvc.status, util.TranslateTimestampSince(pvc.createAt))
+			w.Write(kdescribe.LEVEL_0, "%s\t%s\t%s\t%s\t%s\t%s\n", pvc.name, pvc.namespace, pvc.pv, pvc.sc, pvc.status, util.TranslateTimestampSince(pvc.createAt))
 		}
 		return nil
 	})
