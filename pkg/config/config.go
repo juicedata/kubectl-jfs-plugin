@@ -18,6 +18,7 @@ package config
 
 var (
 	MountNamespace string
+	AllNamespaces  bool
 )
 
 const (

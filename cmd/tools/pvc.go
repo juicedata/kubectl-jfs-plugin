@@ -19,6 +19,7 @@ package tools
 import (
 	"github.com/spf13/cobra"
 
+	"github.com/juicedata/kubectl-jfs-plugin/pkg/config"
 	"github.com/juicedata/kubectl-jfs-plugin/pkg/list"
 	"github.com/juicedata/kubectl-jfs-plugin/pkg/util"
 )
@@ -30,6 +31,9 @@ var pvcCmd = &cobra.Command{
 		ns, _ := RootCmd.Flags().GetString("namespace")
 		if ns == "" {
 			ns = "default"
+		}
+		if config.AllNamespaces {
+			ns = ""
 		}
 		clientSet, err := util.ClientSet(KubernetesConfigFlags)
 		cobra.CheckErr(err)
