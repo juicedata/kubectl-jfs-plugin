@@ -41,6 +41,23 @@ func (e *ExecCli) Upgrade(podName string, recreate bool) (err error) {
 		return fmt.Errorf("pod %s is not juicefs mount pod", podName)
 	}
 
+	var supported bool
+	v := util.ParseClientVersion(pod.Spec.Containers[0].Image)
+	if v.IsCe {
+		supported = !v.LessThan(util.ClientVersion{Major: 1, Minor: 2, Patch: 0})
+		if recreate {
+			supported = !v.LessThan(util.ClientVersion{Major: 1, Minor: 2, Patch: 1})
+		}
+	} else {
+		supported = !v.LessThan(util.ClientVersion{Major: 5, Minor: 0, Patch: 0})
+		if recreate {
+			supported = !v.LessThan(util.ClientVersion{Major: 5, Minor: 1, Patch: 0})
+		}
+	}
+	if !supported {
+		return fmt.Errorf("juicefs mount pod %s is not supported to upgrade: %s", podName, pod.Spec.Containers[0].Image)
+	}
+
 	var csiNode *corev1.Pod
 	if csiNode, err = util.GetCSINode(e.clientSet, pod.Spec.NodeName); err != nil {
 		return err
