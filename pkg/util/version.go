@@ -38,16 +38,16 @@ func (v ClientVersion) LessThan(o ClientVersion) bool {
 	if o.Dev {
 		return true
 	}
-	if o.Major > v.Major {
-		return true
+	if v.Dev {
+		return false
 	}
-	if o.Minor > v.Minor {
-		return true
+	if v.Major != o.Major {
+		return v.Major < o.Major
 	}
-	if o.Patch > v.Patch {
-		return true
+	if v.Minor != o.Minor {
+		return v.Minor < o.Minor
 	}
-	return false
+	return v.Patch < o.Patch
 }
 
 func ParseClientVersion(image string) ClientVersion {
