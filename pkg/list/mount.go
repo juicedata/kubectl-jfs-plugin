@@ -73,7 +73,7 @@ func NewMountAnalyzer(clientSet *kubernetes.Clientset) (ma *MountAnalyzer, err e
 		return
 	}
 
-	if csiNodeList, err = util.GetCSINodeList(ma.clientSet); err != nil {
+	if csiNodeList, err = util.GetCSINodeList(ma.clientSet, ""); err != nil {
 		return
 	}
 	for _, csi := range csiNodeList {

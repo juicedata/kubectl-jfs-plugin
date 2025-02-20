@@ -66,7 +66,7 @@ func (e *ExecCli) Upgrade(podName string, recreate bool) (err error) {
 	var cmds []string
 	cmds = []string{"juicefs-csi-driver", "upgrade", pod.Name}
 	if recreate {
-		cmds = append(cmds, "--restart")
+		cmds = append(cmds, "--recreate")
 	}
 
 	return e.Completion().
