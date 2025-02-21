@@ -65,15 +65,22 @@ type DiffAnalyzer struct {
 }
 
 func NewDiffAnalyzer(clientSet *kubernetes.Clientset, conf *rest.Config) (*DiffAnalyzer, error) {
+	// set global config in jConfig
+	jConfig.Namespace = config.MountNamespace
+
 	k8sClient, err := k8sclient.NewClientWithConfig(*conf)
 	if err != nil {
 		return nil, err
 	}
-	return &DiffAnalyzer{
+	d := &DiffAnalyzer{
 		kubeConf:  conf,
 		clientSet: clientSet,
 		k8sClient: k8sClient,
-	}, nil
+	}
+	if err := d.loadGlobalConfig(); err != nil {
+		return nil, err
+	}
+	return d, nil
 }
 
 func (d *DiffAnalyzer) loadGlobalConfig() error {
@@ -88,10 +95,6 @@ func (d *DiffAnalyzer) loadGlobalConfig() error {
 }
 
 func (d *DiffAnalyzer) generatePodsDiff(nodeName, uniqueId string) error {
-	if err := d.loadGlobalConfig(); err != nil {
-		return err
-	}
-
 	// only get pods in batch job conf
 	pods, err := util.ListMoundPods(d.clientSet, nodeName, uniqueId)
 	if err != nil {
@@ -103,10 +106,6 @@ func (d *DiffAnalyzer) generatePodsDiff(nodeName, uniqueId string) error {
 }
 
 func (d *DiffAnalyzer) generatePodsDiffOfConf(conf *jConfig.BatchConfig) error {
-	if err := d.loadGlobalConfig(); err != nil {
-		return err
-	}
-
 	// only get pods in batch job conf
 	pods, err := util.ListBatchPods(d.clientSet, conf)
 	if err != nil {
@@ -143,9 +142,6 @@ func (d *DiffAnalyzer) _generatePodsDiff(shouldDiff bool) error {
 }
 
 func (d *DiffAnalyzer) generatePodDiff(podName string) (*dashboard.PodDiff, error) {
-	if err := d.loadGlobalConfig(); err != nil {
-		return nil, err
-	}
 
 	pod, err := d.clientSet.CoreV1().Pods(config.MountNamespace).Get(context.Background(), podName, metav1.GetOptions{})
 	if err != nil {

@@ -32,7 +32,6 @@ import (
 
 func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignoreErr bool, quiet bool) error {
 	jobName := dashboard.GenUpgradeJobName()
-
 	cmName := dashboard.GenUpgradeConfig(jobName)
 	csiNodes, err := util.GetCSINodeList(d.clientSet, nodeName)
 	if err != nil {
@@ -80,8 +79,6 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 		}
 	}
 
-	// set global config in jConfig
-	jConfig.Namespace = config.MountNamespace
 	// create configMap of upgrade job
 	cfg, err := jConfig.CreateUpgradeConfig(context.TODO(), d.k8sClient, cmName, batchjConfig)
 	if err != nil {
