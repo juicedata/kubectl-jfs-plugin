@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 
 	"github.com/juicedata/juicefs-csi-driver/pkg/common"
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
@@ -63,6 +64,18 @@ type DiffAnalyzer struct {
 	total    int
 	success  int
 }
+
+type PodDiffList []dashboard.PodDiff
+
+func (p PodDiffList) Len() int {
+	return len(p)
+}
+
+func (p PodDiffList) Less(i, j int) bool {
+	return p[i].Pod.CreationTimestamp.Time.After(p[j].Pod.CreationTimestamp.Time)
+}
+
+func (p PodDiffList) Swap(i, j int) { p[i], p[j] = p[j], p[i] }
 
 func NewDiffAnalyzer(clientSet *kubernetes.Clientset, conf *rest.Config) (*DiffAnalyzer, error) {
 	// set global config in jConfig
@@ -138,6 +151,7 @@ func (d *DiffAnalyzer) _generatePodsDiff(shouldDiff bool) error {
 	}
 
 	d.podsNeedToUpdate, d.podDiffs, err = dashboard.GenPodDiffs(d.allPods, shouldDiff, false, pvs, pvcs, secrets)
+	sort.Sort(PodDiffList(d.podDiffs))
 	return err
 }
 
