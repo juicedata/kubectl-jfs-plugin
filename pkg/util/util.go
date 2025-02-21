@@ -21,7 +21,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"regexp"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -159,30 +158,34 @@ func GetJob(clientSet *kubernetes.Clientset, jobName string) (*batchv1.Job, erro
 	return job, nil
 }
 
-func ListBatchPods(clientSet *kubernetes.Clientset, conf *jConfig.BatchConfig) ([]corev1.Pod, error) {
+func ListMoundPods(clientSet *kubernetes.Clientset, nodeName, uniqueId string) ([]corev1.Pod, error) {
 	ls := &metav1.LabelSelector{
 		MatchLabels: map[string]string{
 			"app.kubernetes.io/name": "juicefs-mount",
 		},
 	}
-	if conf.UniqueId != "" {
-		ls.MatchLabels[common.PodUniqueIdLabelKey] = conf.UniqueId
+	if uniqueId != "" {
+		ls.MatchLabels[common.PodUniqueIdLabelKey] = uniqueId
 	}
 	sls, _ := metav1.LabelSelectorAsSelector(ls)
 	listOptions := metav1.ListOptions{
 		LabelSelector: sls.String(),
 	}
-	if conf.Node != "" {
-		fieldSelector := fields.Set{"spec.nodeName": conf.Node}.AsSelector()
+	if nodeName != "" {
+		fieldSelector := fields.Set{"spec.nodeName": nodeName}.AsSelector()
 		listOptions.FieldSelector = fieldSelector.String()
 	}
 	pods, err := clientSet.CoreV1().Pods(config.MountNamespace).List(context.Background(), listOptions)
+	return pods.Items, err
+}
+
+func ListBatchPods(clientSet *kubernetes.Clientset, conf *jConfig.BatchConfig) ([]corev1.Pod, error) {
+	pods, err := ListMoundPods(clientSet, conf.Node, conf.UniqueId)
 	if err != nil {
 		return nil, err
 	}
-
 	podsMap := make(map[string]corev1.Pod)
-	for _, pod := range pods.Items {
+	for _, pod := range pods {
 		podsMap[pod.Name] = pod
 	}
 
@@ -545,15 +548,6 @@ func parseMntPath(cmd string) (string, string, error) {
 		return "", "", fmt.Errorf("err mntPath:%s", args[2])
 	}
 	return args[2], argSlice[2], nil
-}
-
-func GetUniqueIdFromSecretName(secretName string) string {
-	re := regexp.MustCompile(`juicefs-(.*?)-secret`)
-	match := re.FindStringSubmatch(secretName)
-	if len(match) > 1 {
-		return match[1]
-	}
-	return ""
 }
 
 func ToPtr[T any](v T) *T {

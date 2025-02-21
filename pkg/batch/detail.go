@@ -68,7 +68,7 @@ func (d *DiffAnalyzer) GetDetailOfJob(jobName string) error {
 		}
 	}
 
-	if err := d.generatePodsDiff(conf); err != nil {
+	if err := d.generatePodsDiffOfConf(conf); err != nil {
 		return err
 	}
 

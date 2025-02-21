@@ -19,11 +19,10 @@ package batch
 import (
 	"context"
 	"fmt"
+	"os"
 
-	"github.com/juicedata/juicefs-csi-driver/pkg/common"
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
 	"github.com/juicedata/juicefs-csi-driver/pkg/dashboard"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -35,12 +34,12 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 	jobName := dashboard.GenUpgradeJobName()
 
 	cmName := dashboard.GenUpgradeConfig(jobName)
-	if err := d.generatePodsDiff(nil); err != nil {
-		return err
-	}
 	csiNodes, err := util.GetCSINodeList(d.clientSet, nodeName)
 	if err != nil {
 		return err
+	}
+	if nodeName != "" && len(csiNodes) == 0 {
+		return fmt.Errorf("there is no csi node on node: %s", nodeName)
 	}
 
 	uniqueId := ""
@@ -56,6 +55,9 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 			}
 		}
 	}
+	if err := d.generatePodsDiff(nodeName, uniqueId); err != nil {
+		return err
+	}
 
 	batchjConfig := jConfig.NewBatchConfig(d.podsNeedToUpdate, worker, ignoreErr, true, nodeName, uniqueId, csiNodes)
 
@@ -63,15 +65,15 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 		return fmt.Errorf("no pod needs to upgrade")
 	}
 
+	fmt.Println("The following pods will be upgraded:")
 	out, err := d.printDiff()
 	if err != nil {
 		return err
 	}
 	fmt.Println(out)
 
-	fmt.Print("The above pods will be upgraded, please confirm (y/n): ")
-
 	if !quiet {
+		fmt.Print("Please confirm (y/n): ")
 		if confirm := util.WaitForConfirm(); !confirm {
 			fmt.Println("Upgrade job canceled")
 			return nil
@@ -80,14 +82,21 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 
 	// set global config in jConfig
 	jConfig.Namespace = config.MountNamespace
+	// create configMap of upgrade job
 	cfg, err := jConfig.CreateUpgradeConfig(context.TODO(), d.k8sClient, cmName, batchjConfig)
 	if err != nil {
 		return err
 	}
-	newJob, err := d.newUpgradeJob(jobName)
+	// set dashboard sa and image in env
+	dashboardPod, err := util.GetCSIDashboardPod(d.clientSet)
 	if err != nil {
 		return err
 	}
+	os.Setenv("JUICEFS_CSI_DASHBOARD_SA", getEnvFromPod(dashboardPod, "JUICEFS_CSI_DASHBOARD_SA", "juicefs-csi-dashboard-sa"))
+	os.Setenv("DASHBOARD_IMAGE", getEnvFromPod(dashboardPod, "DASHBOARD_IMAGE", getImageFromPod(dashboardPod)))
+
+	// create job
+	newJob := dashboard.NewUpgradeJob(jobName)
 	job, err := d.clientSet.BatchV1().Jobs(newJob.Namespace).Create(context.TODO(), newJob, metav1.CreateOptions{})
 	if err != nil {
 		return err
@@ -99,65 +108,14 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 	if _, err := d.clientSet.CoreV1().ConfigMaps(cfg.Namespace).Update(context.TODO(), cfg, metav1.UpdateOptions{}); err != nil {
 		return err
 	}
+
+	// print describe cmd
 	detailCmd := fmt.Sprintf("kubectl jfs batch describe %s", job.Name)
 	if config.MountNamespace != "kube-system" {
 		detailCmd = fmt.Sprintf("%s -m %s", detailCmd, config.MountNamespace)
 	}
 	fmt.Printf("Job for batch upgrade created: %s, please execute the following command to see details:\n%s\n", job.Name, detailCmd)
 	return nil
-}
-
-func (d *DiffAnalyzer) newUpgradeJob(jobName string) (*batchv1.Job, error) {
-	dashboardPod, err := util.GetCSIDashboardPod(d.clientSet)
-	if err != nil {
-		return nil, err
-	}
-	sysNamespace := config.MountNamespace
-	cmds := []string{"juicefs-csi-dashboard", "upgrade"}
-	sa := getEnvFromPod(dashboardPod, "JUICEFS_CSI_DASHBOARD_SA")
-	if sa == "" {
-		sa = "juicefs-csi-dashboard-sa"
-	}
-	jConfigName := dashboard.GenUpgradeConfig(jobName)
-	return &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      jobName,
-			Namespace: sysNamespace,
-			Labels: map[string]string{
-				common.PodTypeKey:       common.JobTypeValue,
-				common.JfsJobKind:       common.KindOfUpgrade,
-				common.JfsUpgradeConfig: jConfigName,
-			},
-		},
-		Spec: batchv1.JobSpec{
-			Parallelism:             util.ToPtr(int32(1)),
-			Completions:             util.ToPtr(int32(1)),
-			BackoffLimit:            util.ToPtr(int32(0)),
-			TTLSecondsAfterFinished: util.ToPtr(int32(3600 * 24 * 7)), // automatically deleted after 7 day
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						common.PodTypeKey:        common.JobTypeValue,
-						common.JfsJobKind:        common.KindOfUpgrade,
-						common.JfsUpgradeJobName: jobName,
-					},
-				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{{
-						Name:    "juicefs-upgrade",
-						Image:   getEnvFromPod(dashboardPod, "DASHBOARD_IMAGE"),
-						Command: cmds,
-						Env: []corev1.EnvVar{
-							{Name: "SYS_NAMESPACE", Value: sysNamespace},
-							{Name: common.JfsUpgradeConfig, Value: jConfigName},
-						},
-					}},
-					RestartPolicy:      corev1.RestartPolicyNever,
-					ServiceAccountName: sa,
-				},
-			},
-		},
-	}, nil
 }
 
 func (d *DiffAnalyzer) getUniqueIdOfPVC(pvc *corev1.PersistentVolumeClaim, csiNodes []corev1.Pod) (string, error) {
@@ -209,11 +167,15 @@ func (d *DiffAnalyzer) getPVCByUniqueId(uniqueId string) (*corev1.PersistentVolu
 	return pvc, err
 }
 
-func getEnvFromPod(pod *corev1.Pod, key string) string {
+func getEnvFromPod(pod *corev1.Pod, key string, defaultVal string) string {
 	for _, env := range pod.Spec.Containers[0].Env {
 		if env.Name == key {
 			return env.Value
 		}
 	}
-	return ""
+	return defaultVal
+}
+
+func getImageFromPod(pod *corev1.Pod) string {
+	return pod.Spec.Containers[0].Image
 }
