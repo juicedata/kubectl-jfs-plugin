@@ -21,10 +21,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/juicedata/juicefs-csi-driver/pkg/common"
+	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -103,15 +107,138 @@ func GetAppPodList(clientSet *kubernetes.Clientset, ns string) ([]corev1.Pod, er
 	return podList.Items, nil
 }
 
-func GetCSINodeList(clientSet *kubernetes.Clientset) ([]corev1.Pod, error) {
+func GetCSINodeList(clientSet *kubernetes.Clientset, nodeName string) ([]corev1.Pod, error) {
 	nodeLabelMap, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
 		MatchLabels: map[string]string{config.PodTypeKey: "juicefs-csi-driver", "app": "juicefs-csi-node"},
 	})
-	csiNodeList, err := clientSet.CoreV1().Pods(config.MountNamespace).List(context.Background(), metav1.ListOptions{LabelSelector: nodeLabelMap.String()})
+	listOptions := metav1.ListOptions{LabelSelector: nodeLabelMap.String()}
+	if nodeName != "" {
+		listOptions.FieldSelector = fields.Set{"spec.nodeName": nodeName}.String()
+	}
+	csiNodeList, err := clientSet.CoreV1().Pods(config.MountNamespace).List(context.Background(), listOptions)
 	if err != nil {
 		return nil, err
 	}
 	return csiNodeList.Items, nil
+}
+
+func GetCSIDashboardPod(clientSet *kubernetes.Clientset) (*corev1.Pod, error) {
+	labelMap, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
+		MatchLabels: map[string]string{config.PodTypeKey: "juicefs-csi-driver", "app": "juicefs-csi-dashboard"},
+	})
+	podList, err := clientSet.CoreV1().Pods(config.MountNamespace).List(context.Background(), metav1.ListOptions{LabelSelector: labelMap.String()})
+	if err != nil {
+		return nil, err
+	}
+	if len(podList.Items) == 0 {
+		return nil, fmt.Errorf("no juicefs-csi-dashboard pod found")
+	}
+	return &podList.Items[0], nil
+
+}
+
+func ListBatchJobs(clientSet *kubernetes.Clientset) ([]batchv1.Job, error) {
+	labelMap, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
+		MatchLabels: map[string]string{
+			common.PodTypeKey: common.JobTypeValue,
+			common.JfsJobKind: common.KindOfUpgrade,
+		},
+	})
+	jobList, err := clientSet.BatchV1().Jobs(config.MountNamespace).List(context.Background(), metav1.ListOptions{LabelSelector: labelMap.String()})
+	if err != nil {
+		return nil, err
+	}
+	return jobList.Items, nil
+}
+
+func GetJob(clientSet *kubernetes.Clientset, jobName string) (*batchv1.Job, error) {
+	job, err := clientSet.BatchV1().Jobs(config.MountNamespace).Get(context.Background(), jobName, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return job, nil
+}
+
+func ListBatchPods(clientSet *kubernetes.Clientset, conf *jConfig.BatchConfig) ([]corev1.Pod, error) {
+	ls := &metav1.LabelSelector{
+		MatchLabels: map[string]string{
+			"app.kubernetes.io/name": "juicefs-mount",
+		},
+	}
+	if conf.UniqueId != "" {
+		ls.MatchLabels[common.PodUniqueIdLabelKey] = conf.UniqueId
+	}
+	sls, _ := metav1.LabelSelectorAsSelector(ls)
+	listOptions := metav1.ListOptions{
+		LabelSelector: sls.String(),
+	}
+	if conf.Node != "" {
+		fieldSelector := fields.Set{"spec.nodeName": conf.Node}.AsSelector()
+		listOptions.FieldSelector = fieldSelector.String()
+	}
+	pods, err := clientSet.CoreV1().Pods(config.MountNamespace).List(context.Background(), listOptions)
+	if err != nil {
+		return nil, err
+	}
+
+	podsMap := make(map[string]corev1.Pod)
+	for _, pod := range pods.Items {
+		podsMap[pod.Name] = pod
+	}
+
+	results := make([]corev1.Pod, 0)
+	for _, batch := range conf.Batches {
+		for _, p := range batch {
+			if po, ok := podsMap[p.Name]; ok {
+				results = append(results, po)
+			}
+		}
+	}
+
+	return results, nil
+}
+
+func ListUpgradeConfigs(clientSet *kubernetes.Clientset) (map[string]*jConfig.BatchConfig, error) {
+	var (
+		cmList  *corev1.ConfigMapList
+		configs = make(map[string]*jConfig.BatchConfig)
+		err     error
+	)
+	s, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
+		MatchLabels: map[string]string{
+			common.PodTypeKey: common.ConfigTypeValue,
+		},
+	})
+	cmList, err = clientSet.CoreV1().ConfigMaps(config.MountNamespace).List(context.TODO(), metav1.ListOptions{LabelSelector: s.String()})
+	if err != nil {
+		return nil, err
+	}
+	for _, cm := range cmList.Items {
+		cfg, err := jConfig.LoadBatchConfig(&cm)
+		if err != nil {
+			return nil, err
+		}
+		configs[cm.Name] = cfg
+	}
+	return configs, nil
+}
+
+func GetPodOfUpgradeJob(clientSet *kubernetes.Clientset, job *batchv1.Job) (*corev1.Pod, error) {
+	if job == nil {
+		return nil, nil
+	}
+	s, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
+		MatchLabels: map[string]string{
+			common.PodTypeKey:        common.JobTypeValue,
+			common.JfsJobKind:        common.KindOfUpgrade,
+			common.JfsUpgradeJobName: job.Name,
+		},
+	})
+	podList, err := clientSet.CoreV1().Pods(job.Namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: s.String()})
+	if err == nil && len(podList.Items) != 0 {
+		return &podList.Items[0], nil
+	}
+	return nil, fmt.Errorf("no pod found for job %s", job.Name)
 }
 
 func GetPVCList(clientSet *kubernetes.Clientset, ns string) ([]corev1.PersistentVolumeClaim, error) {
@@ -136,6 +263,38 @@ func GetStorageClassList(clientSet *kubernetes.Clientset) ([]storagev1.StorageCl
 		return nil, err
 	}
 	return scList.Items, nil
+}
+
+func GetSecretList(clientSet *kubernetes.Clientset, namespace string) ([]corev1.Secret, error) {
+	secretList, err := clientSet.CoreV1().Secrets(namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return secretList.Items, nil
+}
+
+func FindPVC(clientSet *kubernetes.Clientset, pvcName string) (*corev1.PersistentVolumeClaim, error) {
+	pvcs, err := clientSet.CoreV1().PersistentVolumeClaims("").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	for _, pvc := range pvcs.Items {
+		if pvc.Name == pvcName {
+			return &pvc, nil
+		}
+	}
+	return nil, fmt.Errorf("pvc %s not found", pvcName)
+}
+
+func GetPVOfPVC(clientSet *kubernetes.Clientset, pvc *corev1.PersistentVolumeClaim) (*corev1.PersistentVolume, error) {
+	if pvc.Spec.VolumeName == "" {
+		return nil, fmt.Errorf("pvc %s has no volumeName", pvc.Name)
+	}
+	pv, err := clientSet.CoreV1().PersistentVolumes().Get(context.Background(), pvc.Spec.VolumeName, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return pv, nil
 }
 
 func GetCSINode(clientSet *kubernetes.Clientset, nodeName string) (*corev1.Pod, error) {
@@ -265,6 +424,45 @@ func GetPVCStatus(pvc corev1.PersistentVolumeClaim) string {
 	return string(pvc.Status.Phase)
 }
 
+func GetJobStatus(job batchv1.Job) string {
+	var status string
+	if hasJobCondition(job.Status.Conditions, batchv1.JobComplete) {
+		status = "Complete"
+	} else if hasJobCondition(job.Status.Conditions, batchv1.JobFailed) {
+		status = "Failed"
+	} else if job.ObjectMeta.DeletionTimestamp != nil {
+		status = "Terminating"
+	} else if hasJobCondition(job.Status.Conditions, batchv1.JobSuspended) {
+		status = "Suspended"
+	} else if hasJobCondition(job.Status.Conditions, batchv1.JobFailureTarget) {
+		status = "FailureTarget"
+	} else {
+		status = "Running"
+	}
+	return status
+}
+
+func GetJobDuration(job batchv1.Job) string {
+	var jobDuration string
+	switch {
+	case job.Status.StartTime == nil:
+	case job.Status.CompletionTime == nil:
+		jobDuration = duration.HumanDuration(time.Since(job.Status.StartTime.Time))
+	default:
+		jobDuration = duration.HumanDuration(job.Status.CompletionTime.Sub(job.Status.StartTime.Time))
+	}
+	return jobDuration
+}
+
+func hasJobCondition(conditions []batchv1.JobCondition, conditionType batchv1.JobConditionType) bool {
+	for _, condition := range conditions {
+		if condition.Type == conditionType {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
 func GetContainerErrorMessage(pod corev1.Pod) string {
 	for _, cn := range pod.Status.InitContainerStatuses {
 		if cn.State.Waiting != nil && cn.State.Waiting.Message != "" {
@@ -347,4 +545,52 @@ func parseMntPath(cmd string) (string, string, error) {
 		return "", "", fmt.Errorf("err mntPath:%s", args[2])
 	}
 	return args[2], argSlice[2], nil
+}
+
+func GetUniqueIdFromSecretName(secretName string) string {
+	re := regexp.MustCompile(`juicefs-(.*?)-secret`)
+	match := re.FindStringSubmatch(secretName)
+	if len(match) > 1 {
+		return match[1]
+	}
+	return ""
+}
+
+func ToPtr[T any](v T) *T {
+	return &v
+}
+func IsShareMount(pod *corev1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	for _, env := range pod.Spec.Containers[0].Env {
+		if env.Name == "STORAGE_CLASS_SHARE_MOUNT" && env.Value == "true" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func WaitForConfirm() bool {
+	var input string
+	for {
+		_, err := fmt.Scanln(&input)
+		if err != nil {
+			fmt.Println("An error occurred while reading input. Please try again.")
+			var discard string
+			fmt.Scanln(&discard)
+			continue
+		}
+
+		input = strings.ToLower(input)
+
+		if input == "y" {
+			return true
+		} else if input == "n" {
+			return false
+		} else {
+			fmt.Printf("Invalid input. Please enter 'y' or 'n':")
+		}
+	}
 }
