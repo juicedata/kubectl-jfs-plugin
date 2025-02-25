@@ -19,9 +19,11 @@ package batch
 import (
 	"fmt"
 	"io"
+	"sort"
 
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
 	"github.com/juicedata/juicefs-csi-driver/pkg/dashboard"
+	batchv1 "k8s.io/api/batch/v1"
 	kdescribe "k8s.io/kubectl/pkg/describe"
 
 	"github.com/juicedata/kubectl-jfs-plugin/pkg/util"
@@ -33,6 +35,7 @@ func (d *DiffAnalyzer) ListJobs() error {
 		return err
 	}
 	d.jobs = jobs
+	sort.Sort(JobList(d.jobs))
 
 	confList, err := util.ListUpgradeConfigs(d.clientSet)
 	if err != nil {
@@ -47,6 +50,16 @@ func (d *DiffAnalyzer) ListJobs() error {
 	fmt.Printf("%s\n", out)
 	return nil
 }
+
+type JobList []batchv1.Job
+
+func (l JobList) Len() int { return len(l) }
+
+func (l JobList) Less(i, j int) bool {
+	return l[i].CreationTimestamp.Time.After(l[j].CreationTimestamp.Time)
+}
+
+func (l JobList) Swap(i, j int) { l[i], l[j] = l[j], l[i] }
 
 func (d *DiffAnalyzer) printJob() (string, error) {
 	return util.TabbedString(func(out io.Writer) error {

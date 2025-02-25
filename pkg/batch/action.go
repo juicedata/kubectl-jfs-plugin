@@ -22,7 +22,7 @@ import (
 	"fmt"
 
 	"github.com/juicedata/juicefs-csi-driver/pkg/common"
-	"github.com/juicedata/juicefs-csi-driver/pkg/config"
+	"github.com/juicedata/juicefs-csi-driver/pkg/dashboard"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/remotecommand"
@@ -42,7 +42,7 @@ func (d *DiffAnalyzer) DoAction(jobName, action string) error {
 		return err
 	}
 	d.conf = conf
-	if !d.canDoAction(conf.Status, action) {
+	if !dashboard.CanDoAction(conf.Status, action) {
 		return fmt.Errorf("cannot [%s] job when status is %s", action, conf.Status)
 	}
 	if action == "delete" {
@@ -62,25 +62,6 @@ func (d *DiffAnalyzer) DoAction(jobName, action string) error {
 	}
 	fmt.Printf("%s job %s successfully\n", action, jobName)
 	return nil
-}
-
-func (d *DiffAnalyzer) canDoAction(status config.UpgradeStatus, action string) bool {
-	switch action {
-	case "stop":
-		return status != config.Fail &&
-			status != config.Success &&
-			status != config.Stop
-	case "resume":
-		return status == config.Pause
-	case "pause":
-		return status != config.Stop &&
-			status != config.Pause &&
-			status != config.Fail &&
-			status != config.Success
-	case "delete":
-		return status == config.Fail || status == config.Success || status == config.Stop || status == config.Pause
-	}
-	return false
 }
 
 func (d *DiffAnalyzer) doActionInUpgradeJob(ctx context.Context, pod *corev1.Pod, action string) error {

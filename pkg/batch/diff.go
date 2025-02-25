@@ -20,6 +20,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"sort"
 
 	"github.com/juicedata/juicefs-csi-driver/pkg/common"
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
@@ -52,6 +54,7 @@ type DiffAnalyzer struct {
 	podsNeedToUpdate []corev1.Pod
 	allPods          []corev1.Pod
 	podDiffs         []dashboard.PodDiff
+	pvcMap           map[string]*corev1.PersistentVolumeClaim
 
 	// used in detail
 	crtJob   *batchv1.Job
@@ -62,54 +65,70 @@ type DiffAnalyzer struct {
 	success  int
 }
 
+type PodDiffList []dashboard.PodDiff
+
+func (p PodDiffList) Len() int {
+	return len(p)
+}
+
+func (p PodDiffList) Less(i, j int) bool {
+	return p[i].Pod.CreationTimestamp.Time.After(p[j].Pod.CreationTimestamp.Time)
+}
+
+func (p PodDiffList) Swap(i, j int) { p[i], p[j] = p[j], p[i] }
+
 func NewDiffAnalyzer(clientSet *kubernetes.Clientset, conf *rest.Config) (*DiffAnalyzer, error) {
+	// set global config in jConfig
+	jConfig.Namespace = config.MountNamespace
+
 	k8sClient, err := k8sclient.NewClientWithConfig(*conf)
 	if err != nil {
 		return nil, err
 	}
-	return &DiffAnalyzer{
+	d := &DiffAnalyzer{
 		kubeConf:  conf,
 		clientSet: clientSet,
 		k8sClient: k8sClient,
-	}, nil
+	}
+	if err := d.loadGlobalConfig(); err != nil {
+		return nil, err
+	}
+	return d, nil
 }
 
-func (d *DiffAnalyzer) generateAllPods(conf *jConfig.BatchConfig) error {
-	if conf != nil {
-		// only get pods in batch job conf
-		pods, err := util.ListBatchPods(d.clientSet, conf)
-		if err != nil {
-			return err
-		}
-		d.allPods = pods
-		return nil
-	}
-
-	// get all pods need to be updated
-	mountPods, err := util.GetMountPodList(d.clientSet, "")
-	if err != nil {
-		return err
-	}
-
-	d.allPods = resource.FilterPodsToUpgrade(corev1.PodList{Items: mountPods}, true)
-	return nil
-}
-
-func (d *DiffAnalyzer) generatePodsDiff(conf *jConfig.BatchConfig) error {
+func (d *DiffAnalyzer) loadGlobalConfig() error {
 	// load config
 	csiNodes, err := util.GetCSINodeList(d.clientSet, "")
 	if err != nil {
 		return err
 	}
-	if err := LoadFromConfigMap(d.clientSet, csiNodes); err != nil {
+	os.Setenv("JUICEFS_CONFIG_NAME", getEnvFromPod(&csiNodes[0], "JUICEFS_CONFIG_NAME", "juicefs-csi-driver-config"))
+
+	return jConfig.LoadFromConfigMap(context.TODO(), d.k8sClient)
+}
+
+func (d *DiffAnalyzer) generatePodsDiff(nodeName, uniqueId string) error {
+	// only get pods in batch job conf
+	pods, err := util.ListMoundPods(d.clientSet, nodeName, uniqueId)
+	if err != nil {
 		return err
 	}
+	d.allPods = resource.FilterPodsToUpgrade(corev1.PodList{Items: pods}, true)
 
-	// get all pods
-	if err := d.generateAllPods(conf); err != nil {
+	return d._generatePodsDiff(true)
+}
+
+func (d *DiffAnalyzer) generatePodsDiffOfConf(conf *jConfig.BatchConfig) error {
+	// only get pods in batch job conf
+	pods, err := util.ListBatchPods(d.clientSet, conf)
+	if err != nil {
 		return err
 	}
+	d.allPods = pods
+	return d._generatePodsDiff(false)
+}
 
+func (d *DiffAnalyzer) _generatePodsDiff(shouldDiff bool) error {
 	// get pvc、pv、secret
 	pvs, err := util.GetPVList(d.clientSet)
 	if err != nil {
@@ -119,67 +138,25 @@ func (d *DiffAnalyzer) generatePodsDiff(conf *jConfig.BatchConfig) error {
 	if err != nil {
 		return err
 	}
+	pvcMap := make(map[string]*corev1.PersistentVolumeClaim)
+	for _, pvc := range pvcs {
+		pvc2 := pvc
+		pvcMap[pvc.Spec.VolumeName] = &pvc2
+	}
+	d.pvcMap = pvcMap
 
 	secrets, err := util.GetSecretList(d.clientSet, "")
 	if err != nil {
 		return err
 	}
-	pvMap := make(map[string]*corev1.PersistentVolume)
-	pvcMap := make(map[string]*corev1.PersistentVolumeClaim)
-	secretMap := make(map[string]*corev1.Secret)
-	custSecretMap := make(map[string]*corev1.Secret)
-	for _, pv := range pvs {
-		pvMap[pv.Name] = &pv
-	}
-	for _, pvc := range pvcs {
-		pvc2 := pvc
-		pvcMap[pvc.Spec.VolumeName] = &pvc2
-	}
-	for _, secret := range secrets {
-		secret2 := secret
-		uniqueId := util.GetUniqueIdFromSecretName(secret2.Name)
-		if uniqueId != "" {
-			secretMap[uniqueId] = &secret2
-		}
-		custSecretMap[secret2.Name] = &secret2
-	}
 
-	var needUpdatePods []corev1.Pod
-	var podDiffs []dashboard.PodDiff
-	for _, pod := range d.allPods {
-		po := pod
-		pv := pvMap[po.Annotations[common.UniqueId]]
-		var custSecret *corev1.Secret
-		if pv != nil && pv.Spec.CSI != nil && pv.Spec.CSI.NodePublishSecretRef != nil {
-			custSecret = custSecretMap[pv.Spec.CSI.NodePublishSecretRef.Name]
-		}
-		diff, err := dashboard.DiffConfig(&po, pv, pvcMap[po.Annotations[common.UniqueId]], secretMap[po.Annotations[common.UniqueId]], custSecret)
-		if err != nil {
-			return err
-		}
-		if !diff {
-			// no diff config, skip
-			continue
-		}
-		oldConfig, _, newConfig, _, err := jConfig.GetDiff(&po, pvcMap[po.Annotations[common.UniqueId]], pv, secretMap[po.Annotations[common.UniqueId]], custSecret)
-		if err != nil {
-			return err
-		}
-		needUpdatePods = append(needUpdatePods, po)
-		pd := dashboard.PodDiff{
-			Pod:       po,
-			OldConfig: *oldConfig,
-			NewConfig: *newConfig,
-		}
-		podDiffs = append(podDiffs, pd)
-
-	}
-	d.podDiffs = podDiffs
-	d.podsNeedToUpdate = needUpdatePods
-	return nil
+	d.podsNeedToUpdate, d.podDiffs, err = dashboard.GenPodDiffs(d.allPods, shouldDiff, false, pvs, pvcs, secrets)
+	sort.Sort(PodDiffList(d.podDiffs))
+	return err
 }
 
 func (d *DiffAnalyzer) generatePodDiff(podName string) (*dashboard.PodDiff, error) {
+
 	pod, err := d.clientSet.CoreV1().Pods(config.MountNamespace).Get(context.Background(), podName, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
@@ -229,7 +206,7 @@ func (d *DiffAnalyzer) generatePodDiff(podName string) (*dashboard.PodDiff, erro
 }
 
 func (d *DiffAnalyzer) ListDiffPods() error {
-	if err := d.generatePodsDiff(nil); err != nil {
+	if err := d.generatePodsDiff("", ""); err != nil {
 		return err
 	}
 	out, err := d.printDiff()
@@ -241,10 +218,6 @@ func (d *DiffAnalyzer) ListDiffPods() error {
 }
 
 func (d *DiffAnalyzer) DiffPod(podName string) error {
-	if err := d.generatePodsDiff(nil); err != nil {
-		return err
-	}
-
 	pd, err := d.generatePodDiff(podName)
 	if err != nil {
 		return err
@@ -273,9 +246,9 @@ func (d *DiffAnalyzer) DiffPod(podName string) error {
 func (d *DiffAnalyzer) printDiff() (string, error) {
 	return util.TabbedString(func(out io.Writer) error {
 		w := kdescribe.NewPrefixWriter(out)
-		w.Write(kdescribe.LEVEL_0, "NAME\tNAMESPACE\tSTATUS\tAGE\n")
+		w.Write(kdescribe.LEVEL_0, "NAME\tNAMESPACE\tPVC\tNODE\tSTATUS\tAGE\n")
 		for _, diff := range d.podDiffs {
-			w.Write(kdescribe.LEVEL_0, "%s\t%s\t%s\t%s\n", util.IfNil(diff.Pod.Name), util.IfNil(diff.Pod.Namespace), util.IfNil(util.GetPodStatus(diff.Pod)), util.TranslateTimestampSince(diff.Pod.CreationTimestamp))
+			w.Write(kdescribe.LEVEL_0, "%s\t%s\t%s\t%s\t%s\t%s\n", util.IfNil(diff.Pod.Name), util.IfNil(diff.Pod.Namespace), util.IfNil(d.pvcMap[diff.Pod.Labels[common.PodUniqueIdLabelKey]].Name), util.IfNil(diff.Pod.Spec.NodeName), util.IfNil(util.GetPodStatus(diff.Pod)), util.TranslateTimestampSince(diff.Pod.CreationTimestamp))
 		}
 		return nil
 	})

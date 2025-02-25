@@ -21,10 +21,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"time"
 
 	"github.com/juicedata/juicefs-csi-driver/pkg/common"
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kdescribe "k8s.io/kubectl/pkg/describe"
 
@@ -60,15 +62,11 @@ func (d *DiffAnalyzer) GetDetailOfJob(jobName string) error {
 	}
 	d.total = total
 
-	for _, batch := range conf.Batches {
-		for _, pod := range batch {
-			if pod.Status == jConfig.Success {
-				d.success++
-			}
-		}
+	if err := d.record(); err != nil {
+		return err
 	}
 
-	if err := d.generatePodsDiff(conf); err != nil {
+	if err := d.generatePodsDiffOfConf(conf); err != nil {
 		return err
 	}
 
@@ -98,6 +96,58 @@ func (d *DiffAnalyzer) LoadUpgradeConfig(ctx context.Context, configName string)
 	}
 
 	return cfg, nil
+}
+
+func (d *DiffAnalyzer) record() error {
+	d.clientSet.CoreV1().Pods(d.podOfJob.Namespace).GetLogs(d.podOfJob.Name, &corev1.PodLogOptions{})
+	logs, err := d.clientSet.CoreV1().Pods(d.podOfJob.Namespace).GetLogs(d.podOfJob.Name, &corev1.PodLogOptions{
+		Container: d.podOfJob.Spec.Containers[0].Name,
+	}).DoRaw(context.TODO())
+	if err != nil {
+		return err
+	}
+	msg := string(logs)
+
+	podsStatus := make(map[string]jConfig.UpgradeStatus)
+
+	runningRegex := `POD-START \[([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)\]`
+	runningRe := regexp.MustCompile(runningRegex)
+
+	runningMatches := runningRe.FindAllStringSubmatch(msg, -1)
+	for _, match := range runningMatches {
+		podName := match[1]
+		podsStatus[podName] = jConfig.Running
+	}
+
+	successRegex := `POD-SUCCESS \[([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)\]`
+	successRe := regexp.MustCompile(successRegex)
+
+	successMatches := successRe.FindAllStringSubmatch(msg, -1)
+	for _, match := range successMatches {
+		podName := match[1]
+		podsStatus[podName] = jConfig.Success
+		d.success++
+	}
+
+	failRegex := `POD-FAIL \[([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)\]`
+	failRe := regexp.MustCompile(failRegex)
+
+	failMatches := failRe.FindAllStringSubmatch(msg, -1)
+	for _, match := range failMatches {
+		podName := match[1]
+		podsStatus[podName] = jConfig.Fail
+	}
+
+	for i := range d.conf.Batches {
+		batch := d.conf.Batches[i]
+		for j := range batch {
+			po := batch[j]
+			if status, ok := podsStatus[po.Name]; ok {
+				d.conf.Batches[i][j].Status = status
+			}
+		}
+	}
+	return nil
 }
 
 func (d *DiffAnalyzer) describe() (string, error) {

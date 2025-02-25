@@ -143,8 +143,8 @@ github.com/jtolds/gls v4.20.0+incompatible h1:xdiiI2gbIgH/gLH7ADydsJ1uDOEzR8yvV7
 github.com/jtolds/gls v4.20.0+incompatible/go.mod h1:QJZ7F/aHp+rZTRtaJ1ow/lLfFfVYBRgL+9YlvaHOwJU=
 github.com/juicedata/juicefs-cache-group-operator v0.2.0 h1:m1yctv9ul+nE/TGA6GaxvIBWpq4ksVnJcppvFBrhPpU=
 github.com/juicedata/juicefs-cache-group-operator v0.2.0/go.mod h1:OHDwNeXbnOJqIIvpTdMBNoUSDW5q/uyw+QXWPslrPx4=
-github.com/juicedata/juicefs-csi-driver v0.26.4 h1:ss6Kg7pJZC3xKIr+pdg/K31WE2FeyKh95QHbF+dt0Ro=
-github.com/juicedata/juicefs-csi-driver v0.26.4/go.mod h1:o3oO702A41xjgKKWunfOoQrRZTuUOiHlnJ4cXMZzyR4=
+github.com/juicedata/juicefs-csi-driver v0.26.5-0.20250221054614-e13d01dd0148 h1:AwJcx5tBt0B4ZhDDVibfa3ggNqTJ/MhoeAypar24LEM=
+github.com/juicedata/juicefs-csi-driver v0.26.5-0.20250221054614-e13d01dd0148/go.mod h1:o3oO702A41xjgKKWunfOoQrRZTuUOiHlnJ4cXMZzyR4=
 github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI2bnpBCr8=
 github.com/kisielk/gotool v1.0.0/go.mod h1:XhKaO+MFFWcvkIS/tQcRk01m1F5IRFswLeQ+oQHNcck=
 github.com/klauspost/cpuid/v2 v2.0.9/go.mod h1:FInQzS24/EEf25PyTYn52gqo7WaD8xa0213Md/qVLRg=
