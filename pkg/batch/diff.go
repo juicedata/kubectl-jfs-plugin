@@ -31,6 +31,7 @@ import (
 	"github.com/sergi/go-diff/diffmatchpatch"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -149,10 +150,36 @@ func (d *DiffAnalyzer) _generatePodsDiff(shouldDiff bool) error {
 	if err != nil {
 		return err
 	}
+	nodeMap, err := d.buildNodeMap(d.allPods)
+	if err != nil {
+		return err
+	}
 
-	d.podsNeedToUpdate, d.podDiffs, err = dashboard.GenPodDiffs(d.allPods, shouldDiff, false, pvs, pvcs, secrets)
+	d.podsNeedToUpdate, d.podDiffs, err = dashboard.GenPodDiffs(d.allPods, shouldDiff, pvs, pvcs, secrets, nodeMap)
 	sort.Sort(PodDiffList(d.podDiffs))
 	return err
+}
+
+func (d *DiffAnalyzer) buildNodeMap(pods []corev1.Pod) (map[string]*corev1.Node, error) {
+	nodeMap := make(map[string]*corev1.Node)
+	for _, pod := range pods {
+		if pod.Spec.NodeName == "" {
+			continue
+		}
+		if _, ok := nodeMap[pod.Spec.NodeName]; ok {
+			continue
+		}
+		node, err := d.clientSet.CoreV1().Nodes().Get(context.Background(), pod.Spec.NodeName, metav1.GetOptions{})
+		if err != nil {
+			if k8serrors.IsNotFound(err) {
+				nodeMap[pod.Spec.NodeName] = nil
+				continue
+			}
+			return nil, err
+		}
+		nodeMap[pod.Spec.NodeName] = node
+	}
+	return nodeMap, nil
 }
 
 func (d *DiffAnalyzer) generatePodDiff(podName string) (*dashboard.PodDiff, error) {
@@ -193,14 +220,14 @@ func (d *DiffAnalyzer) generatePodDiff(podName string) (*dashboard.PodDiff, erro
 		}
 	}
 
-	oldConfig, _, newConfig, _, err := jConfig.GetDiff(pod, pvc, pv, pvcSecret, custSecret)
+	oldSetting, newSetting, err := jConfig.GetDiff(pod, pvc, pv, pvcSecret, custSecret)
 	if err != nil {
 		return nil, err
 	}
 	pd := &dashboard.PodDiff{
-		Pod:       *pod,
-		OldConfig: *oldConfig,
-		NewConfig: *newConfig,
+		Pod:        *pod,
+		OldSetting: oldSetting,
+		NewSetting: newSetting,
 	}
 	return pd, nil
 }
@@ -223,11 +250,11 @@ func (d *DiffAnalyzer) DiffPod(podName string) error {
 		return err
 	}
 
-	oldText, err := yaml.Marshal(pd.OldConfig)
+	oldText, err := yaml.Marshal(pd.OldSetting)
 	if err != nil {
 		return err
 	}
-	newText, err := yaml.Marshal(pd.NewConfig)
+	newText, err := yaml.Marshal(pd.NewSetting)
 	if err != nil {
 		return err
 	}
