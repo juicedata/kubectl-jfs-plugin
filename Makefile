@@ -28,4 +28,4 @@ build:
 	-e BUILD_DATE=${BUILD_DATE} \
 	-v $(shell pwd)/bin:/bin/jfs \
 	-w /go/src/github.com/juicedata/kubectl-jfs-plugin \
-	golang:1.22 sh ./hack/multibuild.sh ./cmd/ /bin/jfs
+	golang:1.25 sh ./hack/multibuild.sh ./cmd/ /bin/jfs

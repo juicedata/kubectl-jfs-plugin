@@ -59,7 +59,7 @@ var batchDiffCmd = &cobra.Command{
 		cobra.CheckErr(err)
 
 		if len(args) < 1 {
-			cobra.CheckErr(da.ListDiffPods())
+			cobra.CheckErr(da.ListDiffPods(nodeName))
 		} else {
 			cobra.CheckErr(da.DiffPod(args[0]))
 		}

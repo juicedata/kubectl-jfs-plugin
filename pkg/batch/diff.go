@@ -31,6 +31,7 @@ import (
 	"github.com/sergi/go-diff/diffmatchpatch"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -47,8 +48,9 @@ type DiffAnalyzer struct {
 	k8sClient *k8sclient.K8sClient
 
 	// used in list job
-	jobs     []batchv1.Job
-	confList map[string]*jConfig.BatchConfig
+	jobs            []batchv1.Job
+	confList        map[string]*jConfig.BatchConfig
+	currentNodeName string
 
 	// used in detail/upgrade/diff
 	podsNeedToUpdate []corev1.Pod
@@ -108,6 +110,7 @@ func (d *DiffAnalyzer) loadGlobalConfig() error {
 }
 
 func (d *DiffAnalyzer) generatePodsDiff(nodeName, uniqueId string) error {
+	d.currentNodeName = nodeName
 	// only get pods in batch job conf
 	pods, err := util.ListMoundPods(d.clientSet, nodeName, uniqueId)
 	if err != nil {
@@ -119,6 +122,7 @@ func (d *DiffAnalyzer) generatePodsDiff(nodeName, uniqueId string) error {
 }
 
 func (d *DiffAnalyzer) generatePodsDiffOfConf(conf *jConfig.BatchConfig) error {
+	d.currentNodeName = ""
 	// only get pods in batch job conf
 	pods, err := util.ListBatchPods(d.clientSet, conf)
 	if err != nil {
@@ -149,10 +153,52 @@ func (d *DiffAnalyzer) _generatePodsDiff(shouldDiff bool) error {
 	if err != nil {
 		return err
 	}
+	nodeMap, err := d.buildNodeMap(d.allPods)
+	if err != nil {
+		return err
+	}
 
-	d.podsNeedToUpdate, d.podDiffs, err = dashboard.GenPodDiffs(d.allPods, shouldDiff, false, pvs, pvcs, secrets)
+	d.podsNeedToUpdate, d.podDiffs, err = dashboard.GenPodDiffs(d.allPods, shouldDiff, pvs, pvcs, secrets, nodeMap)
 	sort.Sort(PodDiffList(d.podDiffs))
 	return err
+}
+
+func (d *DiffAnalyzer) buildNodeMap(pods []corev1.Pod) (map[string]*corev1.Node, error) {
+	if d.currentNodeName != "" {
+		nodeMap := make(map[string]*corev1.Node, 1)
+		node, err := d.clientSet.CoreV1().Nodes().Get(context.Background(), d.currentNodeName, metav1.GetOptions{})
+		if err != nil {
+			if k8serrors.IsNotFound(err) {
+				nodeMap[d.currentNodeName] = nil
+				return nodeMap, nil
+			}
+			return nil, err
+		}
+		nodeMap[d.currentNodeName] = node
+		return nodeMap, nil
+	}
+
+	nodes, err := d.clientSet.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	allNodes := make(map[string]*corev1.Node, len(nodes.Items))
+	for i := range nodes.Items {
+		node := &nodes.Items[i]
+		allNodes[node.Name] = node
+	}
+
+	nodeMap := make(map[string]*corev1.Node)
+	for _, pod := range pods {
+		if pod.Spec.NodeName == "" {
+			continue
+		}
+		if _, ok := nodeMap[pod.Spec.NodeName]; ok {
+			continue
+		}
+		nodeMap[pod.Spec.NodeName] = allNodes[pod.Spec.NodeName]
+	}
+	return nodeMap, nil
 }
 
 func (d *DiffAnalyzer) generatePodDiff(podName string) (*dashboard.PodDiff, error) {
@@ -193,20 +239,20 @@ func (d *DiffAnalyzer) generatePodDiff(podName string) (*dashboard.PodDiff, erro
 		}
 	}
 
-	oldConfig, _, newConfig, _, err := jConfig.GetDiff(pod, pvc, pv, pvcSecret, custSecret)
+	oldSetting, newSetting, err := jConfig.GetDiff(pod, pvc, pv, pvcSecret, custSecret)
 	if err != nil {
 		return nil, err
 	}
 	pd := &dashboard.PodDiff{
-		Pod:       *pod,
-		OldConfig: *oldConfig,
-		NewConfig: *newConfig,
+		Pod:        *pod,
+		OldSetting: oldSetting,
+		NewSetting: newSetting,
 	}
 	return pd, nil
 }
 
-func (d *DiffAnalyzer) ListDiffPods() error {
-	if err := d.generatePodsDiff("", ""); err != nil {
+func (d *DiffAnalyzer) ListDiffPods(nodeName string) error {
+	if err := d.generatePodsDiff(nodeName, ""); err != nil {
 		return err
 	}
 	out, err := d.printDiff()
@@ -223,11 +269,11 @@ func (d *DiffAnalyzer) DiffPod(podName string) error {
 		return err
 	}
 
-	oldText, err := yaml.Marshal(pd.OldConfig)
+	oldText, err := yaml.Marshal(pd.OldSetting)
 	if err != nil {
 		return err
 	}
-	newText, err := yaml.Marshal(pd.NewConfig)
+	newText, err := yaml.Marshal(pd.NewSetting)
 	if err != nil {
 		return err
 	}
