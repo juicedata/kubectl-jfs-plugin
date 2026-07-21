@@ -27,6 +27,7 @@ import (
 
 	"github.com/juicedata/juicefs-csi-driver/pkg/common"
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -134,6 +135,14 @@ func GetCSIDashboardPod(clientSet *kubernetes.Clientset) (*corev1.Pod, error) {
 	}
 	return &podList.Items[0], nil
 
+}
+
+func GetCSIDashboardDeployment(clientSet *kubernetes.Clientset) (*appsv1.Deployment, error) {
+	deployment, err := clientSet.AppsV1().Deployments(config.MountNamespace).Get(context.Background(), "juicefs-csi-dashboard", metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("get deployment juicefs-csi-dashboard failed: %w", err)
+	}
+	return deployment, nil
 }
 
 func ListBatchJobs(clientSet *kubernetes.Clientset) ([]batchv1.Job, error) {
