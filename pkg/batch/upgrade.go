@@ -23,6 +23,7 @@ import (
 
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
 	"github.com/juicedata/juicefs-csi-driver/pkg/dashboard"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -85,12 +86,12 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 		return err
 	}
 	// set dashboard sa and image in env
-	dashboardPod, err := util.GetCSIDashboardPod(d.clientSet)
+	dashboardDeployment, err := util.GetCSIDashboardDeployment(d.clientSet)
 	if err != nil {
 		return err
 	}
-	os.Setenv("JUICEFS_CSI_DASHBOARD_SA", getEnvFromPod(dashboardPod, "JUICEFS_CSI_DASHBOARD_SA", "juicefs-csi-dashboard-sa"))
-	os.Setenv("DASHBOARD_IMAGE", getEnvFromPod(dashboardPod, "DASHBOARD_IMAGE", getImageFromPod(dashboardPod)))
+	os.Setenv("JUICEFS_CSI_DASHBOARD_SA", getEnvFromDeployment(dashboardDeployment, "JUICEFS_CSI_DASHBOARD_SA", "juicefs-csi-dashboard-sa"))
+	os.Setenv("DASHBOARD_IMAGE", getEnvFromDeployment(dashboardDeployment, "DASHBOARD_IMAGE", getImageFromDeployment(dashboardDeployment)))
 
 	// create job
 	newJob := dashboard.NewUpgradeJob(jobName)
@@ -165,6 +166,9 @@ func (d *DiffAnalyzer) getPVCByUniqueId(uniqueId string) (*corev1.PersistentVolu
 }
 
 func getEnvFromPod(pod *corev1.Pod, key string, defaultVal string) string {
+	if len(pod.Spec.Containers) == 0 {
+		return defaultVal
+	}
 	for _, env := range pod.Spec.Containers[0].Env {
 		if env.Name == key {
 			return env.Value
@@ -173,6 +177,21 @@ func getEnvFromPod(pod *corev1.Pod, key string, defaultVal string) string {
 	return defaultVal
 }
 
-func getImageFromPod(pod *corev1.Pod) string {
-	return pod.Spec.Containers[0].Image
+func getEnvFromDeployment(deployment *appsv1.Deployment, key string, defaultVal string) string {
+	if len(deployment.Spec.Template.Spec.Containers) == 0 {
+		return defaultVal
+	}
+	for _, env := range deployment.Spec.Template.Spec.Containers[0].Env {
+		if env.Name == key {
+			return env.Value
+		}
+	}
+	return defaultVal
+}
+
+func getImageFromDeployment(deployment *appsv1.Deployment) string {
+	if len(deployment.Spec.Template.Spec.Containers) == 0 {
+		return ""
+	}
+	return deployment.Spec.Template.Spec.Containers[0].Image
 }
