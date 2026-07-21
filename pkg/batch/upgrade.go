@@ -86,12 +86,17 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 		return err
 	}
 	// set dashboard sa and image in env
-	dashboardDeployment, err := util.GetCSIDashboardDeployment(d.clientSet)
-	if err != nil {
-		return err
+	dashboardImage := os.Getenv("DASHBOARD_IMAGE")
+	dashboardSA := os.Getenv("JUICEFS_CSI_DASHBOARD_SA")
+
+	if dashboardImage == "" || dashboardSA == "" {
+		dashboardDeployment, err := util.GetCSIDashboardDeployment(d.clientSet)
+		if err != nil {
+			return err
+		}
+		os.Setenv("JUICEFS_CSI_DASHBOARD_SA", getEnvFromDeployment(dashboardDeployment, "JUICEFS_CSI_DASHBOARD_SA", "juicefs-csi-dashboard-sa"))
+		os.Setenv("DASHBOARD_IMAGE", getEnvFromDeployment(dashboardDeployment, "DASHBOARD_IMAGE", getImageFromDeployment(dashboardDeployment)))
 	}
-	os.Setenv("JUICEFS_CSI_DASHBOARD_SA", getEnvFromDeployment(dashboardDeployment, "JUICEFS_CSI_DASHBOARD_SA", "juicefs-csi-dashboard-sa"))
-	os.Setenv("DASHBOARD_IMAGE", getEnvFromDeployment(dashboardDeployment, "DASHBOARD_IMAGE", getImageFromDeployment(dashboardDeployment)))
 
 	// create job
 	newJob := dashboard.NewUpgradeJob(jobName)
