@@ -20,7 +20,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 
+	"github.com/juicedata/juicefs-csi-driver/pkg/common"
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
 	"github.com/juicedata/juicefs-csi-driver/pkg/dashboard"
 	appsv1 "k8s.io/api/apps/v1"
@@ -57,6 +60,14 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 	}
 	if err := d.generatePodsDiff(nodeName, uniqueId); err != nil {
 		return err
+	}
+
+	skippedPods, err := d.filterPodsInOngoingUpgradeJobs()
+	if err != nil {
+		return err
+	}
+	if len(skippedPods) > 0 {
+		fmt.Printf("Skip %d pods already in ongoing upgrade jobs: %s\n", len(skippedPods), strings.Join(skippedPods, ", "))
 	}
 
 	batchjConfig := jConfig.NewBatchConfig(d.podsNeedToUpdate, worker, ignoreErr, true, nodeName, uniqueId, csiNodes)
@@ -119,6 +130,71 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 	}
 	fmt.Printf("Job for batch upgrade created: %s, please execute the following command to see details:\n%s\n", job.Name, detailCmd)
 	return nil
+}
+
+func isUpgradeJobOngoing(status jConfig.UpgradeStatus) bool {
+	return status != jConfig.Success && status != jConfig.Fail && status != jConfig.Stop
+}
+
+func (d *DiffAnalyzer) filterPodsInOngoingUpgradeJobs() ([]string, error) {
+	jobs, err := util.ListBatchJobs(d.clientSet)
+	if err != nil {
+		return nil, err
+	}
+	if len(jobs) == 0 {
+		return nil, nil
+	}
+
+	confList, err := util.ListUpgradeConfigs(d.clientSet)
+	if err != nil {
+		return nil, err
+	}
+
+	podsInOngoingJobs := make(map[string]struct{})
+	for _, job := range jobs {
+		confName := job.Labels[common.JfsUpgradeConfig]
+		if confName == "" {
+			continue
+		}
+		conf, ok := confList[confName]
+		if !ok || conf == nil || !isUpgradeJobOngoing(conf.Status) {
+			continue
+		}
+		for _, batch := range conf.Batches {
+			for _, pod := range batch {
+				if pod.Name != "" {
+					podsInOngoingJobs[pod.Name] = struct{}{}
+				}
+			}
+		}
+	}
+
+	if len(podsInOngoingJobs) == 0 {
+		return nil, nil
+	}
+
+	skippedPods := make([]string, 0)
+	filteredPods := make([]corev1.Pod, 0, len(d.podsNeedToUpdate))
+	for _, pod := range d.podsNeedToUpdate {
+		if _, exists := podsInOngoingJobs[pod.Name]; exists {
+			skippedPods = append(skippedPods, pod.Name)
+			continue
+		}
+		filteredPods = append(filteredPods, pod)
+	}
+	d.podsNeedToUpdate = filteredPods
+
+	filteredDiffs := make([]dashboard.PodDiff, 0, len(d.podDiffs))
+	for _, diff := range d.podDiffs {
+		if _, exists := podsInOngoingJobs[diff.Pod.Name]; exists {
+			continue
+		}
+		filteredDiffs = append(filteredDiffs, diff)
+	}
+	d.podDiffs = filteredDiffs
+
+	sort.Strings(skippedPods)
+	return skippedPods, nil
 }
 
 func (d *DiffAnalyzer) getUniqueIdOfPVC(pvc *corev1.PersistentVolumeClaim, csiNodes []corev1.Pod) (string, error) {
