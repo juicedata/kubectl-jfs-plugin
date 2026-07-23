@@ -115,7 +115,7 @@ func (ma *MountAnalyzer) ListMountPod() error {
 	}
 
 	if len(ma.mounts) == 0 {
-		fmt.Printf("No mount pod found in %s namespace.", config.MountNamespace)
+		fmt.Printf("No mount pod found in %s namespace.\n", config.MountNamespace)
 		return nil
 	}
 

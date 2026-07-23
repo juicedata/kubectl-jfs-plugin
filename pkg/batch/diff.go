@@ -22,6 +22,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/juicedata/juicefs-csi-driver/pkg/common"
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
@@ -133,7 +134,14 @@ func (d *DiffAnalyzer) generatePodsDiffOfConf(conf *jConfig.BatchConfig) error {
 }
 
 func (d *DiffAnalyzer) _generatePodsDiff(shouldDiff bool) error {
-	// get pvc、pv、secret
+	// Detect share-mount mode from csi node env first, then fetch data on demand.
+	csiNodes, err := util.GetCSINodeList(d.clientSet, d.currentNodeName)
+	if err != nil {
+		return err
+	}
+	storageClassShareMount, fsShareMount := detectShareMountModes(csiNodes)
+
+	// get pvc、pv
 	pvs, err := util.GetPVList(d.clientSet)
 	if err != nil {
 		return err
@@ -142,17 +150,60 @@ func (d *DiffAnalyzer) _generatePodsDiff(shouldDiff bool) error {
 	if err != nil {
 		return err
 	}
-	pvcMap := make(map[string]*corev1.PersistentVolumeClaim)
+
+	var secrets []corev1.Secret
+	secretMap := make(map[string]*corev1.Secret)
+	if fsShareMount {
+		secrets, err = util.GetSecretList(d.clientSet, "")
+		if err != nil {
+			return err
+		}
+		secretMap = make(map[string]*corev1.Secret, len(secrets))
+		for i := range secrets {
+			sec := &secrets[i]
+			secretMap[fmt.Sprintf("%s/%s", sec.Namespace, sec.Name)] = sec
+		}
+	}
+
+	pvcByVolumeName := make(map[string]*corev1.PersistentVolumeClaim)
 	for _, pvc := range pvcs {
 		pvc2 := pvc
-		pvcMap[pvc.Spec.VolumeName] = &pvc2
+		if pvc.Spec.VolumeName != "" {
+			pvcByVolumeName[pvc.Spec.VolumeName] = &pvc2
+		}
+	}
+
+	// Build PVC lookup by pod unique-id candidates used by csi-driver.
+	pvcMap := make(map[string]*corev1.PersistentVolumeClaim)
+	for _, pv := range pvs {
+		pvc, ok := pvcByVolumeName[pv.Name]
+		if !ok || pvc == nil {
+			continue
+		}
+		if pv.Spec.CSI != nil && pv.Spec.CSI.VolumeHandle != "" {
+			pvcMap[pv.Spec.CSI.VolumeHandle] = pvc
+		}
+		if storageClassShareMount && pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName != "" {
+			if _, exists := pvcMap[*pvc.Spec.StorageClassName]; !exists {
+				pvcMap[*pvc.Spec.StorageClassName] = pvc
+			}
+		}
+		if pvc.Spec.VolumeName != "" {
+			pvcMap[pvc.Spec.VolumeName] = pvc
+		}
+		if fsShareMount && pv.Spec.CSI != nil && pv.Spec.CSI.NodePublishSecretRef != nil {
+			ref := pv.Spec.CSI.NodePublishSecretRef
+			if sec := secretMap[fmt.Sprintf("%s/%s", ref.Namespace, ref.Name)]; sec != nil {
+				if fsname, ok := sec.Data["name"]; ok && string(fsname) != "" {
+					if _, exists := pvcMap[string(fsname)]; !exists {
+						pvcMap[string(fsname)] = pvc
+					}
+				}
+			}
+		}
 	}
 	d.pvcMap = pvcMap
 
-	secrets, err := util.GetSecretList(d.clientSet, "")
-	if err != nil {
-		return err
-	}
 	nodeMap, err := d.buildNodeMap(d.allPods)
 	if err != nil {
 		return err
@@ -161,6 +212,29 @@ func (d *DiffAnalyzer) _generatePodsDiff(shouldDiff bool) error {
 	d.podsNeedToUpdate, d.podDiffs, err = dashboard.GenPodDiffs(d.allPods, shouldDiff, pvs, pvcs, secrets, nodeMap)
 	sort.Sort(PodDiffList(d.podDiffs))
 	return err
+}
+
+func detectShareMountModes(csiNodes []corev1.Pod) (storageClassShareMount bool, fsShareMount bool) {
+	for _, pod := range csiNodes {
+		if len(pod.Spec.Containers) == 0 {
+			continue
+		}
+		for _, env := range pod.Spec.Containers[0].Env {
+			if !strings.EqualFold(env.Value, "true") {
+				continue
+			}
+			switch env.Name {
+			case "STORAGE_CLASS_SHARE_MOUNT":
+				storageClassShareMount = true
+			case "FS_SHARE_MOUNT":
+				fsShareMount = true
+			}
+			if storageClassShareMount && fsShareMount {
+				return true, true
+			}
+		}
+	}
+	return storageClassShareMount, fsShareMount
 }
 
 func (d *DiffAnalyzer) buildNodeMap(pods []corev1.Pod) (map[string]*corev1.Node, error) {
@@ -294,7 +368,12 @@ func (d *DiffAnalyzer) printDiff() (string, error) {
 		w := kdescribe.NewPrefixWriter(out)
 		w.Write(kdescribe.LEVEL_0, "NAME\tNAMESPACE\tPVC\tNODE\tSTATUS\tAGE\n")
 		for _, diff := range d.podDiffs {
-			w.Write(kdescribe.LEVEL_0, "%s\t%s\t%s\t%s\t%s\t%s\n", util.IfNil(diff.Pod.Name), util.IfNil(diff.Pod.Namespace), util.IfNil(d.pvcMap[diff.Pod.Labels[common.PodUniqueIdLabelKey]].Name), util.IfNil(diff.Pod.Spec.NodeName), util.IfNil(util.GetPodStatus(diff.Pod)), util.TranslateTimestampSince(diff.Pod.CreationTimestamp))
+			uniqueID := diff.Pod.Labels[common.PodUniqueIdLabelKey]
+			pvcName := ""
+			if pvc := d.pvcMap[uniqueID]; pvc != nil {
+				pvcName = pvc.Name
+			}
+			w.Write(kdescribe.LEVEL_0, "%s\t%s\t%s\t%s\t%s\t%s\n", util.IfNil(diff.Pod.Name), util.IfNil(diff.Pod.Namespace), util.IfNil(pvcName), util.IfNil(diff.Pod.Spec.NodeName), util.IfNil(util.GetPodStatus(diff.Pod)), util.TranslateTimestampSince(diff.Pod.CreationTimestamp))
 		}
 		return nil
 	})
