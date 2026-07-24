@@ -566,13 +566,31 @@ func IsShareMount(pod *corev1.Pod) bool {
 	if pod == nil {
 		return false
 	}
-	for _, env := range pod.Spec.Containers[0].Env {
-		if env.Name == "STORAGE_CLASS_SHARE_MOUNT" && env.Value == "true" {
-			return true
+	storageClassShareMount, _ := GetShareMountModes([]corev1.Pod{*pod})
+	return storageClassShareMount
+}
+
+func GetShareMountModes(csiNodes []corev1.Pod) (storageClassShareMount bool, fsShareMount bool) {
+	for _, pod := range csiNodes {
+		if len(pod.Spec.Containers) == 0 {
+			continue
+		}
+		for _, env := range pod.Spec.Containers[0].Env {
+			if !strings.EqualFold(env.Value, "true") {
+				continue
+			}
+			switch env.Name {
+			case "STORAGE_CLASS_SHARE_MOUNT":
+				storageClassShareMount = true
+			case "FS_SHARE_MOUNT":
+				fsShareMount = true
+			}
+			if storageClassShareMount && fsShareMount {
+				return true, true
+			}
 		}
 	}
-
-	return false
+	return storageClassShareMount, fsShareMount
 }
 
 func WaitForConfirm() bool {

@@ -129,6 +129,53 @@ func TestIsUpgradeJobOngoing(t *testing.T) {
 	}
 }
 
+func TestUniqueIdFromPV(t *testing.T) {
+	pv := &corev1.PersistentVolume{
+		Spec: corev1.PersistentVolumeSpec{
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{VolumeHandle: "volume-handle"},
+			},
+			StorageClassName: "sc-name",
+		},
+	}
+	secret := &corev1.Secret{Data: map[string][]byte{"name": []byte("fs-name")}}
+
+	if got := uniqueIdFromPV(pv, true, false, nil); got != "sc-name" {
+		t.Fatalf("storage class share unique id mismatch, got %q", got)
+	}
+	if got := uniqueIdFromPV(pv, false, true, secret); got != "fs-name" {
+		t.Fatalf("fs share unique id mismatch, got %q", got)
+	}
+	if got := uniqueIdFromPV(pv, false, false, nil); got != "volume-handle" {
+		t.Fatalf("default unique id mismatch, got %q", got)
+	}
+}
+
+func TestUniqueIdMatchesPV(t *testing.T) {
+	pv := &corev1.PersistentVolume{
+		Spec: corev1.PersistentVolumeSpec{
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{VolumeHandle: "volume-handle"},
+			},
+			StorageClassName: "sc-name",
+		},
+	}
+	secret := &corev1.Secret{Data: map[string][]byte{"name": []byte("fs-name")}}
+
+	if !uniqueIdMatchesPV(pv, "sc-name", true, false, nil) {
+		t.Fatalf("expected storage class share match")
+	}
+	if !uniqueIdMatchesPV(pv, "fs-name", false, true, secret) {
+		t.Fatalf("expected fs share match")
+	}
+	if !uniqueIdMatchesPV(pv, "volume-handle", false, false, nil) {
+		t.Fatalf("expected volume handle match")
+	}
+	if uniqueIdMatchesPV(pv, "wrong", true, false, nil) {
+		t.Fatalf("expected storage class share mismatch")
+	}
+}
+
 func podNames(pods []corev1.Pod) []string {
 	names := make([]string, 0, len(pods))
 	for _, pod := range pods {

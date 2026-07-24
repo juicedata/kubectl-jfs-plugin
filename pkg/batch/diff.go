@@ -22,7 +22,6 @@ import (
 	"io"
 	"os"
 	"sort"
-	"strings"
 
 	"github.com/juicedata/juicefs-csi-driver/pkg/common"
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
@@ -44,9 +43,11 @@ import (
 )
 
 type DiffAnalyzer struct {
-	kubeConf  *rest.Config
-	clientSet *kubernetes.Clientset
-	k8sClient *k8sclient.K8sClient
+	kubeConf               *rest.Config
+	clientSet              *kubernetes.Clientset
+	k8sClient              *k8sclient.K8sClient
+	storageClassShareMount bool
+	fsShareMount           bool
 
 	// used in list job
 	jobs            []batchv1.Job
@@ -105,6 +106,7 @@ func (d *DiffAnalyzer) loadGlobalConfig() error {
 	if err != nil {
 		return err
 	}
+	d.storageClassShareMount, d.fsShareMount = util.GetShareMountModes(csiNodes)
 	os.Setenv("JUICEFS_CONFIG_NAME", getEnvFromPod(&csiNodes[0], "JUICEFS_CONFIG_NAME", "juicefs-csi-driver-config"))
 
 	return jConfig.LoadFromConfigMap(context.TODO(), d.k8sClient)
@@ -134,12 +136,8 @@ func (d *DiffAnalyzer) generatePodsDiffOfConf(conf *jConfig.BatchConfig) error {
 }
 
 func (d *DiffAnalyzer) _generatePodsDiff(shouldDiff bool) error {
-	// Detect share-mount mode from csi node env first, then fetch data on demand.
-	csiNodes, err := util.GetCSINodeList(d.clientSet, d.currentNodeName)
-	if err != nil {
-		return err
-	}
-	storageClassShareMount, fsShareMount := detectShareMountModes(csiNodes)
+	storageClassShareMount := d.storageClassShareMount
+	fsShareMount := d.fsShareMount
 
 	// get pvc、pv
 	pvs, err := util.GetPVList(d.clientSet)
@@ -212,29 +210,6 @@ func (d *DiffAnalyzer) _generatePodsDiff(shouldDiff bool) error {
 	d.podsNeedToUpdate, d.podDiffs, err = dashboard.GenPodDiffs(d.allPods, shouldDiff, pvs, pvcs, secrets, nodeMap)
 	sort.Sort(PodDiffList(d.podDiffs))
 	return err
-}
-
-func detectShareMountModes(csiNodes []corev1.Pod) (storageClassShareMount bool, fsShareMount bool) {
-	for _, pod := range csiNodes {
-		if len(pod.Spec.Containers) == 0 {
-			continue
-		}
-		for _, env := range pod.Spec.Containers[0].Env {
-			if !strings.EqualFold(env.Value, "true") {
-				continue
-			}
-			switch env.Name {
-			case "STORAGE_CLASS_SHARE_MOUNT":
-				storageClassShareMount = true
-			case "FS_SHARE_MOUNT":
-				fsShareMount = true
-			}
-			if storageClassShareMount && fsShareMount {
-				return true, true
-			}
-		}
-	}
-	return storageClassShareMount, fsShareMount
 }
 
 func (d *DiffAnalyzer) buildNodeMap(pods []corev1.Pod) (map[string]*corev1.Node, error) {
