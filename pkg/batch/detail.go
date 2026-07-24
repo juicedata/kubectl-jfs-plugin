@@ -27,6 +27,7 @@ import (
 	"github.com/juicedata/juicefs-csi-driver/pkg/common"
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kdescribe "k8s.io/kubectl/pkg/describe"
 
@@ -50,11 +51,9 @@ func (d *DiffAnalyzer) GetDetailOfJob(jobName string) error {
 		return err
 	}
 	d.conf = conf
-	if d.conf.UniqueId != "" {
-		d.pvc, err = d.getPVCByUniqueId(d.conf.UniqueId)
-		if err != nil {
-			return err
-		}
+	d.pvc, err = d.getPVCOfUpgradeJob(conf)
+	if err != nil {
+		return err
 	}
 	total := 0
 	for _, batch := range conf.Batches {
@@ -96,6 +95,34 @@ func (d *DiffAnalyzer) LoadUpgradeConfig(ctx context.Context, configName string)
 	}
 
 	return cfg, nil
+}
+
+func (d *DiffAnalyzer) getPVCOfUpgradeJob(conf *jConfig.BatchConfig) (*corev1.PersistentVolumeClaim, error) {
+	if conf == nil {
+		return nil, nil
+	}
+	for _, batch := range conf.Batches {
+		for _, mountPod := range batch {
+			if mountPod.Name == "" {
+				continue
+			}
+			pod, err := d.clientSet.CoreV1().Pods(config.MountNamespace).Get(context.Background(), mountPod.Name, metav1.GetOptions{})
+			if err != nil {
+				if k8serrors.IsNotFound(err) {
+					continue
+				}
+				return nil, err
+			}
+			pvc, err := d.getPVCOfMountPod(context.Background(), pod)
+			if err != nil {
+				return nil, err
+			}
+			if pvc != nil {
+				return pvc, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 func (d *DiffAnalyzer) record() error {

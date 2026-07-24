@@ -53,7 +53,7 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 			return err
 		}
 		if pvc != nil {
-			uniqueId, err = d.getUniqueIdOfPVC(pvc)
+			uniqueId, err = d.getUniqueIdOfPVC(pvc, csiNodes)
 			if err != nil {
 				return err
 			}
@@ -208,14 +208,15 @@ func filterPodsByOngoingJobs(
 	return filteredPods, filteredDiffs, skippedPods
 }
 
-func (d *DiffAnalyzer) getUniqueIdOfPVC(pvc *corev1.PersistentVolumeClaim) (string, error) {
+func (d *DiffAnalyzer) getUniqueIdOfPVC(pvc *corev1.PersistentVolumeClaim, csiNodes []corev1.Pod) (string, error) {
 	pv, err := util.GetPVOfPVC(d.clientSet, pvc)
 	if err != nil {
 		return "", err
 	}
+	storageClassShareMount, fsShareMount := util.GetShareMountModes(csiNodes)
 
 	var secret *corev1.Secret
-	if d.fsShareMount && pv.Spec.CSI != nil && pv.Spec.CSI.NodePublishSecretRef != nil {
+	if fsShareMount && pv.Spec.CSI != nil && pv.Spec.CSI.NodePublishSecretRef != nil {
 		secretName := pv.Spec.CSI.NodePublishSecretRef.Name
 		secretNamespace := pv.Spec.CSI.NodePublishSecretRef.Namespace
 		secret, err = d.clientSet.CoreV1().Secrets(secretNamespace).Get(context.Background(), secretName, metav1.GetOptions{})
@@ -224,60 +225,7 @@ func (d *DiffAnalyzer) getUniqueIdOfPVC(pvc *corev1.PersistentVolumeClaim) (stri
 		}
 	}
 
-	return uniqueIdFromPV(pv, d.storageClassShareMount, d.fsShareMount, secret), nil
-}
-
-func (d *DiffAnalyzer) getPVCByUniqueId(uniqueId string) (*corev1.PersistentVolumeClaim, error) {
-	if d.storageClassShareMount {
-		pvcs, err := d.clientSet.CoreV1().PersistentVolumeClaims("").List(context.Background(), metav1.ListOptions{})
-		if err != nil {
-			return nil, err
-		}
-		for _, pvc := range pvcs.Items {
-			if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName == uniqueId {
-				return &pvc, nil
-			}
-		}
-		return nil, fmt.Errorf("pvc not found by uniqueId: %s", uniqueId)
-	}
-	if d.fsShareMount {
-		pvs, err := d.clientSet.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
-		if err != nil {
-			return nil, err
-		}
-		for _, pv := range pvs.Items {
-			if pv.Spec.ClaimRef == nil || pv.Spec.CSI == nil || pv.Spec.CSI.NodePublishSecretRef == nil {
-				continue
-			}
-			secretName := pv.Spec.CSI.NodePublishSecretRef.Name
-			secretNamespace := pv.Spec.CSI.NodePublishSecretRef.Namespace
-			secret, err := d.clientSet.CoreV1().Secrets(secretNamespace).Get(context.Background(), secretName, metav1.GetOptions{})
-			if err != nil {
-				return nil, err
-			}
-			if uniqueIdMatchesPV(&pv, uniqueId, d.storageClassShareMount, d.fsShareMount, secret) {
-				return d.clientSet.CoreV1().PersistentVolumeClaims(pv.Spec.ClaimRef.Namespace).Get(context.Background(), pv.Spec.ClaimRef.Name, metav1.GetOptions{})
-			}
-		}
-		return nil, fmt.Errorf("pvc not found by uniqueId: %s", uniqueId)
-	}
-	pv := &corev1.PersistentVolume{}
-	pvs, err := d.clientSet.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	for _, p := range pvs.Items {
-		if p.Spec.CSI != nil && p.Spec.CSI.VolumeHandle == uniqueId {
-			pv = &p
-			break
-		}
-	}
-
-	if pv.Spec.ClaimRef == nil {
-		return nil, fmt.Errorf("pvc not found by uniqueId: %s", uniqueId)
-	}
-	pvc, err := d.clientSet.CoreV1().PersistentVolumeClaims(pv.Spec.ClaimRef.Namespace).Get(context.Background(), pv.Spec.ClaimRef.Name, metav1.GetOptions{})
-	return pvc, err
+	return uniqueIdFromPV(pv, storageClassShareMount, fsShareMount, secret), nil
 }
 
 func uniqueIdFromPV(pv *corev1.PersistentVolume, storageClassShareMount, fsShareMount bool, secret *corev1.Secret) string {
@@ -293,21 +241,6 @@ func uniqueIdFromPV(pv *corev1.PersistentVolume, storageClassShareMount, fsShare
 		}
 	}
 	return pv.Spec.CSI.VolumeHandle
-}
-
-func uniqueIdMatchesPV(pv *corev1.PersistentVolume, uniqueId string, storageClassShareMount, fsShareMount bool, secret *corev1.Secret) bool {
-	if pv == nil || pv.Spec.CSI == nil {
-		return false
-	}
-	if storageClassShareMount && pv.Spec.StorageClassName == uniqueId {
-		return true
-	}
-	if fsShareMount && secret != nil {
-		if fsname, ok := secret.Data["name"]; ok && string(fsname) == uniqueId {
-			return true
-		}
-	}
-	return pv.Spec.CSI.VolumeHandle == uniqueId
 }
 
 func getEnvFromPod(pod *corev1.Pod, key string, defaultVal string) string {
