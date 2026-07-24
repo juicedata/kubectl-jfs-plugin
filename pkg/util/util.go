@@ -93,6 +93,25 @@ func GetPodList(clientSet *kubernetes.Clientset, ns string) ([]corev1.Pod, error
 	return podList.Items, nil
 }
 
+func ListNodePodsByUID(clientSet kubernetes.Interface, nodeName string) (map[string]*corev1.Pod, error) {
+	podList, err := clientSet.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{
+		FieldSelector: fields.SelectorFromSet(fields.Set{"spec.nodeName": nodeName}).String(),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	podsByUID := make(map[string]*corev1.Pod, len(podList.Items))
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+		if nodeName != "" && pod.Spec.NodeName != nodeName {
+			continue
+		}
+		podsByUID[string(pod.UID)] = pod
+	}
+	return podsByUID, nil
+}
+
 func GetAppPodList(clientSet *kubernetes.Clientset, ns string) ([]corev1.Pod, error) {
 	labelMap, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
 		MatchExpressions: []metav1.LabelSelectorRequirement{{

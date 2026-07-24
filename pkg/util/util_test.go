@@ -20,6 +20,9 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestGetShareMountModes(t *testing.T) {
@@ -89,5 +92,44 @@ func TestIsShareMount(t *testing.T) {
 	}
 	if IsShareMount(nil) {
 		t.Fatalf("expected IsShareMount(nil) to return false")
+	}
+}
+
+func TestListNodePodsByUID(t *testing.T) {
+	clientSet := fake.NewSimpleClientset(
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "app-1",
+				Namespace: "ns-a",
+				UID:       types.UID("uid-a"),
+			},
+			Spec: corev1.PodSpec{NodeName: "node-1"},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "app-2",
+				Namespace: "ns-b",
+				UID:       types.UID("uid-b"),
+			},
+			Spec: corev1.PodSpec{NodeName: "node-2"},
+		},
+	)
+
+	podsByUID, err := ListNodePodsByUID(clientSet, "node-1")
+	if err != nil {
+		t.Fatalf("ListNodePodsByUID returned error: %v", err)
+	}
+	if len(podsByUID) != 1 {
+		t.Fatalf("expected 1 pod on node-1, got %d", len(podsByUID))
+	}
+	pod := podsByUID["uid-a"]
+	if pod == nil {
+		t.Fatalf("expected uid-a in result")
+	}
+	if pod.Name != "app-1" {
+		t.Fatalf("expected app-1, got %s", pod.Name)
+	}
+	if podsByUID["uid-b"] != nil {
+		t.Fatalf("did not expect uid-b in result")
 	}
 }

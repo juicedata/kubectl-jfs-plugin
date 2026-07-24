@@ -26,6 +26,7 @@ import (
 	"github.com/juicedata/juicefs-csi-driver/pkg/common"
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
 	"github.com/juicedata/juicefs-csi-driver/pkg/dashboard"
+	dashboardutils "github.com/juicedata/juicefs-csi-driver/pkg/dashboard/utils"
 	"github.com/juicedata/juicefs-csi-driver/pkg/k8sclient"
 	"github.com/juicedata/juicefs-csi-driver/pkg/util/resource"
 	"github.com/sergi/go-diff/diffmatchpatch"
@@ -136,9 +137,6 @@ func (d *DiffAnalyzer) generatePodsDiffOfConf(conf *jConfig.BatchConfig) error {
 }
 
 func (d *DiffAnalyzer) _generatePodsDiff(shouldDiff bool) error {
-	storageClassShareMount := d.storageClassShareMount
-	fsShareMount := d.fsShareMount
-
 	// get pvc、pv
 	pvs, err := util.GetPVList(d.clientSet)
 	if err != nil {
@@ -148,57 +146,15 @@ func (d *DiffAnalyzer) _generatePodsDiff(shouldDiff bool) error {
 	if err != nil {
 		return err
 	}
-
 	var secrets []corev1.Secret
-	secretMap := make(map[string]*corev1.Secret)
-	if fsShareMount {
-		secrets, err = util.GetSecretList(d.clientSet, "")
-		if err != nil {
-			return err
-		}
-		secretMap = make(map[string]*corev1.Secret, len(secrets))
-		for i := range secrets {
-			sec := &secrets[i]
-			secretMap[fmt.Sprintf("%s/%s", sec.Namespace, sec.Name)] = sec
-		}
+	secrets, err = util.GetSecretList(d.clientSet, "")
+	if err != nil {
+		return err
 	}
 
-	pvcByVolumeName := make(map[string]*corev1.PersistentVolumeClaim)
-	for _, pvc := range pvcs {
-		pvc2 := pvc
-		if pvc.Spec.VolumeName != "" {
-			pvcByVolumeName[pvc.Spec.VolumeName] = &pvc2
-		}
-	}
-
-	// Build PVC lookup by pod unique-id candidates used by csi-driver.
-	pvcMap := make(map[string]*corev1.PersistentVolumeClaim)
-	for _, pv := range pvs {
-		pvc, ok := pvcByVolumeName[pv.Name]
-		if !ok || pvc == nil {
-			continue
-		}
-		if pv.Spec.CSI != nil && pv.Spec.CSI.VolumeHandle != "" {
-			pvcMap[pv.Spec.CSI.VolumeHandle] = pvc
-		}
-		if storageClassShareMount && pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName != "" {
-			if _, exists := pvcMap[*pvc.Spec.StorageClassName]; !exists {
-				pvcMap[*pvc.Spec.StorageClassName] = pvc
-			}
-		}
-		if pvc.Spec.VolumeName != "" {
-			pvcMap[pvc.Spec.VolumeName] = pvc
-		}
-		if fsShareMount && pv.Spec.CSI != nil && pv.Spec.CSI.NodePublishSecretRef != nil {
-			ref := pv.Spec.CSI.NodePublishSecretRef
-			if sec := secretMap[fmt.Sprintf("%s/%s", ref.Namespace, ref.Name)]; sec != nil {
-				if fsname, ok := sec.Data["name"]; ok && string(fsname) != "" {
-					if _, exists := pvcMap[string(fsname)]; !exists {
-						pvcMap[string(fsname)] = pvc
-					}
-				}
-			}
-		}
+	pvcMap, err := d.buildMountPodPVCMap(context.Background(), d.allPods, pvcs)
+	if err != nil {
+		return err
 	}
 	d.pvcMap = pvcMap
 
@@ -210,6 +166,65 @@ func (d *DiffAnalyzer) _generatePodsDiff(shouldDiff bool) error {
 	d.podsNeedToUpdate, d.podDiffs, err = dashboard.GenPodDiffs(d.allPods, shouldDiff, pvs, pvcs, secrets, nodeMap)
 	sort.Sort(PodDiffList(d.podDiffs))
 	return err
+}
+
+func (d *DiffAnalyzer) buildMountPodPVCMap(ctx context.Context, mountPods []corev1.Pod, pvcs []corev1.PersistentVolumeClaim) (map[string]*corev1.PersistentVolumeClaim, error) {
+	pvcByName := make(map[string]*corev1.PersistentVolumeClaim, len(pvcs))
+	for i := range pvcs {
+		pvc := &pvcs[i]
+		pvcByName[fmt.Sprintf("%s/%s", pvc.Namespace, pvc.Name)] = pvc
+	}
+
+	podsByNode := make(map[string]map[string]*corev1.Pod)
+	mountPodPVCs := make(map[string]*corev1.PersistentVolumeClaim, len(mountPods))
+	for i := range mountPods {
+		mountPod := &mountPods[i]
+		if mountPod.Spec.NodeName == "" {
+			continue
+		}
+
+		podsByUID, ok := podsByNode[mountPod.Spec.NodeName]
+		if !ok {
+			var err error
+			podsByUID, err = util.ListNodePodsByUID(d.clientSet, mountPod.Spec.NodeName)
+			if err != nil {
+				return nil, err
+			}
+			podsByNode[mountPod.Spec.NodeName] = podsByUID
+		}
+
+		for _, annotation := range mountPod.Annotations {
+			targetUID := dashboardutils.GetTargetUID(annotation)
+			if targetUID == "" {
+				continue
+			}
+			appPod, ok := podsByUID[targetUID]
+			if !ok {
+				continue
+			}
+			if pvc := firstPVCOfPod(appPod, pvcByName); pvc != nil {
+				mountPodPVCs[mountPod.Name] = pvc
+				break
+			}
+		}
+	}
+
+	return mountPodPVCs, nil
+}
+
+func firstPVCOfPod(pod *corev1.Pod, pvcByName map[string]*corev1.PersistentVolumeClaim) *corev1.PersistentVolumeClaim {
+	if pod == nil {
+		return nil
+	}
+	for _, volume := range pod.Spec.Volumes {
+		if volume.PersistentVolumeClaim == nil {
+			continue
+		}
+		if pvc := pvcByName[fmt.Sprintf("%s/%s", pod.Namespace, volume.PersistentVolumeClaim.ClaimName)]; pvc != nil {
+			return pvc
+		}
+	}
+	return nil
 }
 
 func (d *DiffAnalyzer) buildNodeMap(pods []corev1.Pod) (map[string]*corev1.Node, error) {
@@ -263,7 +278,7 @@ func (d *DiffAnalyzer) generatePodDiff(podName string) (*dashboard.PodDiff, erro
 		custSecret *corev1.Secret
 		pvcSecret  *corev1.Secret
 	)
-	pvc, err = d.getPVCByUniqueId(pod.Annotations[common.UniqueId])
+	pvc, err = d.getPVCOfMountPod(context.Background(), pod)
 	if err != nil {
 		return nil, err
 	}
@@ -343,13 +358,42 @@ func (d *DiffAnalyzer) printDiff() (string, error) {
 		w := kdescribe.NewPrefixWriter(out)
 		w.Write(kdescribe.LEVEL_0, "NAME\tNAMESPACE\tPVC\tNODE\tSTATUS\tAGE\n")
 		for _, diff := range d.podDiffs {
-			uniqueID := diff.Pod.Labels[common.PodUniqueIdLabelKey]
 			pvcName := ""
-			if pvc := d.pvcMap[uniqueID]; pvc != nil {
+			if pvc := d.pvcMap[diff.Pod.Name]; pvc != nil {
 				pvcName = pvc.Name
 			}
 			w.Write(kdescribe.LEVEL_0, "%s\t%s\t%s\t%s\t%s\t%s\n", util.IfNil(diff.Pod.Name), util.IfNil(diff.Pod.Namespace), util.IfNil(pvcName), util.IfNil(diff.Pod.Spec.NodeName), util.IfNil(util.GetPodStatus(diff.Pod)), util.TranslateTimestampSince(diff.Pod.CreationTimestamp))
 		}
 		return nil
 	})
+}
+
+func (d *DiffAnalyzer) getPVCOfMountPod(ctx context.Context, mountPod *corev1.Pod) (*corev1.PersistentVolumeClaim, error) {
+	if mountPod == nil || mountPod.Spec.NodeName == "" {
+		return nil, nil
+	}
+
+	podsByUID, err := util.ListNodePodsByUID(d.clientSet, mountPod.Spec.NodeName)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, annotation := range mountPod.Annotations {
+		targetUID := dashboardutils.GetTargetUID(annotation)
+		if targetUID == "" {
+			continue
+		}
+		appPod, ok := podsByUID[targetUID]
+		if !ok {
+			continue
+		}
+		for _, volume := range appPod.Spec.Volumes {
+			if volume.PersistentVolumeClaim == nil {
+				continue
+			}
+			return d.clientSet.CoreV1().PersistentVolumeClaims(appPod.Namespace).Get(ctx, volume.PersistentVolumeClaim.ClaimName, metav1.GetOptions{})
+		}
+	}
+
+	return nil, nil
 }
