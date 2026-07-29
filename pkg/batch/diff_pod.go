@@ -123,7 +123,6 @@ func (d *DiffAnalyzer) getPVCOfMountPod(ctx context.Context, mountPod *corev1.Po
 	if err != nil {
 		return nil, err
 	}
-	var fallback *corev1.PersistentVolumeClaim
 
 	for _, annotation := range mountPod.Annotations {
 		targetUID := dashboardutils.GetTargetUID(annotation)
@@ -145,12 +144,7 @@ func (d *DiffAnalyzer) getPVCOfMountPod(ctx context.Context, mountPod *corev1.Po
 				}
 				return nil, err
 			}
-			if fallback == nil {
-				fallback = pvc
-			}
-			if mountPodUniqueID == "" {
-				continue
-			}
+
 			uniqueID, err := d.getUniqueIdOfPVCWithModes(pvc, storageClassShareMount, fsShareMount)
 			if err != nil {
 				if k8serrors.IsNotFound(err) {
@@ -158,19 +152,26 @@ func (d *DiffAnalyzer) getPVCOfMountPod(ctx context.Context, mountPod *corev1.Po
 				}
 				return nil, err
 			}
+			if uniqueID == "" {
+				continue
+			}
 			if uniqueID == mountPodUniqueID {
 				return pvc, nil
 			}
 		}
 	}
 
-	return fallback, nil
+	return nil, nil
 }
 
 func (d *DiffAnalyzer) getUniqueIdOfPVCWithModes(pvc *corev1.PersistentVolumeClaim, storageClassShareMount, fsShareMount bool) (string, error) {
 	pv, err := util.GetPVOfPVC(d.clientSet, pvc)
 	if err != nil {
 		return "", err
+	}
+
+	if pv.Spec.CSI == nil || pv.Spec.CSI.Driver != config.DriverName {
+		return "", nil
 	}
 
 	var secret *corev1.Secret

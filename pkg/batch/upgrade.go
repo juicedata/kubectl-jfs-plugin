@@ -163,6 +163,9 @@ func (d *DiffAnalyzer) getUniqueIdOfPVC(pvc *corev1.PersistentVolumeClaim, csiNo
 	if err != nil {
 		return "", err
 	}
+	if pv.Spec.CSI == nil || pv.Spec.CSI.Driver != config.DriverName {
+		return "", fmt.Errorf("pvc %s is not a juicefs csi pvc", pvc.Name)
+	}
 	storageClassShareMount, fsShareMount := util.GetShareMountModes(csiNodes)
 
 	var secret *corev1.Secret
