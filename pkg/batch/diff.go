@@ -22,6 +22,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
 	"github.com/juicedata/juicefs-csi-driver/pkg/dashboard"
@@ -195,6 +196,13 @@ func (d *DiffAnalyzer) buildNodeMap(pods []corev1.Pod) (map[string]*corev1.Node,
 func (d *DiffAnalyzer) ListDiffPods(nodeName string) error {
 	if err := d.generatePodsDiff(nodeName, ""); err != nil {
 		return err
+	}
+	skippedPods, err := d.filterPodsInOngoingUpgradeJobs()
+	if err != nil {
+		return err
+	}
+	if len(skippedPods) > 0 {
+		fmt.Printf("Skip %d pods already in ongoing upgrade jobs: %s\n", len(skippedPods), strings.Join(skippedPods, ", "))
 	}
 	out, err := d.printDiff()
 	if err != nil {
