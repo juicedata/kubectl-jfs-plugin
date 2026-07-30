@@ -93,6 +93,25 @@ func GetPodList(clientSet *kubernetes.Clientset, ns string) ([]corev1.Pod, error
 	return podList.Items, nil
 }
 
+func ListNodePodsByUID(clientSet kubernetes.Interface, nodeName string) (map[string]*corev1.Pod, error) {
+	podList, err := clientSet.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{
+		FieldSelector: fields.SelectorFromSet(fields.Set{"spec.nodeName": nodeName}).String(),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	podsByUID := make(map[string]*corev1.Pod, len(podList.Items))
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+		if nodeName != "" && pod.Spec.NodeName != nodeName {
+			continue
+		}
+		podsByUID[string(pod.UID)] = pod
+	}
+	return podsByUID, nil
+}
+
 func GetAppPodList(clientSet *kubernetes.Clientset, ns string) ([]corev1.Pod, error) {
 	labelMap, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
 		MatchExpressions: []metav1.LabelSelectorRequirement{{
@@ -566,13 +585,31 @@ func IsShareMount(pod *corev1.Pod) bool {
 	if pod == nil {
 		return false
 	}
-	for _, env := range pod.Spec.Containers[0].Env {
-		if env.Name == "STORAGE_CLASS_SHARE_MOUNT" && env.Value == "true" {
-			return true
+	storageClassShareMount, _ := GetShareMountModes([]corev1.Pod{*pod})
+	return storageClassShareMount
+}
+
+func GetShareMountModes(csiNodes []corev1.Pod) (storageClassShareMount bool, fsShareMount bool) {
+	for _, pod := range csiNodes {
+		if len(pod.Spec.Containers) == 0 {
+			continue
+		}
+		for _, env := range pod.Spec.Containers[0].Env {
+			if !strings.EqualFold(env.Value, "true") {
+				continue
+			}
+			switch env.Name {
+			case "STORAGE_CLASS_SHARE_MOUNT":
+				storageClassShareMount = true
+			case "FS_SHARE_MOUNT":
+				fsShareMount = true
+			}
+			if storageClassShareMount && fsShareMount {
+				return true, true
+			}
 		}
 	}
-
-	return false
+	return storageClassShareMount, fsShareMount
 }
 
 func WaitForConfirm() bool {

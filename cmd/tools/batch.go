@@ -214,7 +214,7 @@ var batchDeleteCmd = &cobra.Command{
 
 		da, err := batch.NewDiffAnalyzer(clientSet, conf)
 		cobra.CheckErr(err)
-		cobra.CheckErr(da.DoAction(args[0], "stop"))
+		cobra.CheckErr(da.DoAction(args[0], "delete"))
 	},
 }
 

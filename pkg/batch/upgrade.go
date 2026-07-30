@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
 	"github.com/juicedata/juicefs-csi-driver/pkg/dashboard"
@@ -57,6 +58,14 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 	}
 	if err := d.generatePodsDiff(nodeName, uniqueId); err != nil {
 		return err
+	}
+
+	skippedPods, err := d.filterPodsInOngoingUpgradeJobs()
+	if err != nil {
+		return err
+	}
+	if len(skippedPods) > 0 {
+		fmt.Printf("Skip %d pods already in ongoing upgrade jobs: %s\n", len(skippedPods), strings.Join(skippedPods, ", "))
 	}
 
 	batchjConfig := jConfig.NewBatchConfig(d.podsNeedToUpdate, worker, ignoreErr, true, nodeName, uniqueId, csiNodes)
@@ -121,53 +130,70 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 	return nil
 }
 
+func (d *DiffAnalyzer) filterPodsInOngoingUpgradeJobs() ([]string, error) {
+	filteredPods, skippedPods, err := jConfig.FilterPodsNotInOngoingUpgrade(context.TODO(), d.k8sClient, d.podsNeedToUpdate)
+	if err != nil {
+		return nil, err
+	}
+	d.podsNeedToUpdate = filteredPods
+	d.podDiffs = filterPodDiffsByPodNames(d.podDiffs, skippedPods)
+	return skippedPods, nil
+}
+
+func filterPodDiffsByPodNames(podDiffs []dashboard.PodDiff, skippedPodNames []string) []dashboard.PodDiff {
+	if len(skippedPodNames) == 0 || len(podDiffs) == 0 {
+		return podDiffs
+	}
+	skippedSet := make(map[string]struct{}, len(skippedPodNames))
+	for _, name := range skippedPodNames {
+		skippedSet[name] = struct{}{}
+	}
+	filteredDiffs := make([]dashboard.PodDiff, 0, len(podDiffs))
+	for _, diff := range podDiffs {
+		if _, exists := skippedSet[diff.Pod.Name]; exists {
+			continue
+		}
+		filteredDiffs = append(filteredDiffs, diff)
+	}
+	return filteredDiffs
+}
+
 func (d *DiffAnalyzer) getUniqueIdOfPVC(pvc *corev1.PersistentVolumeClaim, csiNodes []corev1.Pod) (string, error) {
 	pv, err := util.GetPVOfPVC(d.clientSet, pvc)
 	if err != nil {
 		return "", err
 	}
-
-	uniqueId := pv.Spec.CSI.VolumeHandle
-	if len(csiNodes) != 0 && util.IsShareMount(&csiNodes[0]) {
-		uniqueId = pv.Spec.StorageClassName
+	if pv.Spec.CSI == nil || pv.Spec.CSI.Driver != config.DriverName {
+		return "", fmt.Errorf("pvc %s is not a juicefs csi pvc", pvc.Name)
 	}
-	return uniqueId, nil
+	storageClassShareMount, fsShareMount := util.GetShareMountModes(csiNodes)
+
+	var secret *corev1.Secret
+	if fsShareMount && pv.Spec.CSI != nil && pv.Spec.CSI.NodePublishSecretRef != nil {
+		secretName := pv.Spec.CSI.NodePublishSecretRef.Name
+		secretNamespace := pv.Spec.CSI.NodePublishSecretRef.Namespace
+		secret, err = d.clientSet.CoreV1().Secrets(secretNamespace).Get(context.Background(), secretName, metav1.GetOptions{})
+		if err != nil {
+			return "", err
+		}
+	}
+
+	return uniqueIdFromPV(pv, storageClassShareMount, fsShareMount, secret), nil
 }
 
-func (d *DiffAnalyzer) getPVCByUniqueId(uniqueId string) (*corev1.PersistentVolumeClaim, error) {
-	csiNodes, err := util.GetCSINodeList(d.clientSet, "")
-	if err != nil {
-		return nil, err
+func uniqueIdFromPV(pv *corev1.PersistentVolume, storageClassShareMount, fsShareMount bool, secret *corev1.Secret) string {
+	if pv == nil || pv.Spec.CSI == nil {
+		return ""
 	}
-	if len(csiNodes) != 0 && util.IsShareMount(&csiNodes[0]) {
-		pvcs, err := d.clientSet.CoreV1().PersistentVolumeClaims("").List(context.Background(), metav1.ListOptions{})
-		if err != nil {
-			return nil, err
-		}
-		for _, pvc := range pvcs.Items {
-			if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName == uniqueId {
-				return &pvc, nil
-			}
-		}
-		return nil, fmt.Errorf("pvc not found by uniqueId: %s", uniqueId)
+	if storageClassShareMount && pv.Spec.StorageClassName != "" {
+		return pv.Spec.StorageClassName
 	}
-	pv := &corev1.PersistentVolume{}
-	pvs, err := d.clientSet.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	for _, p := range pvs.Items {
-		if p.Spec.CSI != nil && p.Spec.CSI.VolumeHandle == uniqueId {
-			pv = &p
-			break
+	if fsShareMount && secret != nil {
+		if fsname, ok := secret.Data["name"]; ok && string(fsname) != "" {
+			return string(fsname)
 		}
 	}
-
-	if pv.Spec.ClaimRef == nil {
-		return nil, fmt.Errorf("pvc not found by uniqueId: %s", uniqueId)
-	}
-	pvc, err := d.clientSet.CoreV1().PersistentVolumeClaims(pv.Spec.ClaimRef.Namespace).Get(context.Background(), pv.Spec.ClaimRef.Name, metav1.GetOptions{})
-	return pvc, err
+	return pv.Spec.CSI.VolumeHandle
 }
 
 func getEnvFromPod(pod *corev1.Pod, key string, defaultVal string) string {
