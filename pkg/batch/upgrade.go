@@ -25,6 +25,7 @@ import (
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
 	"github.com/juicedata/juicefs-csi-driver/pkg/dashboard"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -109,6 +110,7 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 
 	// create job
 	newJob := dashboard.NewUpgradeJob(jobName)
+	addBatchUpgradeTimeoutEnv(newJob)
 	job, err := d.clientSet.BatchV1().Jobs(newJob.Namespace).Create(context.TODO(), newJob, metav1.CreateOptions{})
 	if err != nil {
 		return err
@@ -225,4 +227,20 @@ func getImageFromDeployment(deployment *appsv1.Deployment) string {
 		return ""
 	}
 	return deployment.Spec.Template.Spec.Containers[0].Image
+}
+
+func addBatchUpgradeTimeoutEnv(job *batchv1.Job) {
+	timeout := os.Getenv("BATCH_UPGRADE_TIMEOUT")
+	if timeout == "" || job == nil || len(job.Spec.Template.Spec.Containers) == 0 {
+		return
+	}
+	envs := job.Spec.Template.Spec.Containers[0].Env
+	for i := range envs {
+		if envs[i].Name == "BATCH_UPGRADE_TIMEOUT" {
+			envs[i].Value = timeout
+			job.Spec.Template.Spec.Containers[0].Env = envs
+			return
+		}
+	}
+	job.Spec.Template.Spec.Containers[0].Env = append(envs, corev1.EnvVar{Name: "BATCH_UPGRADE_TIMEOUT", Value: timeout})
 }

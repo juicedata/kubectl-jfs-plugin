@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/juicedata/juicefs-csi-driver/pkg/dashboard"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -66,6 +67,34 @@ func TestUniqueIdFromPV(t *testing.T) {
 	}
 	if got := uniqueIdFromPV(pv, false, false, nil); got != "volume-handle" {
 		t.Fatalf("default unique id mismatch, got %q", got)
+	}
+}
+
+func TestAddBatchUpgradeTimeoutEnv(t *testing.T) {
+	t.Setenv("BATCH_UPGRADE_TIMEOUT", "30m")
+
+	job := &batchv1.Job{
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name: "juicefs-upgrade",
+						Env:  []corev1.EnvVar{{Name: "SYS_NAMESPACE", Value: "kube-system"}},
+					}},
+				},
+			},
+		},
+	}
+
+	addBatchUpgradeTimeoutEnv(job)
+
+	got := job.Spec.Template.Spec.Containers[0].Env
+	want := []corev1.EnvVar{
+		{Name: "SYS_NAMESPACE", Value: "kube-system"},
+		{Name: "BATCH_UPGRADE_TIMEOUT", Value: "30m"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("job env mismatch, got %#v want %#v", got, want)
 	}
 }
 
