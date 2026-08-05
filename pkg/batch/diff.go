@@ -102,7 +102,7 @@ func (d *DiffAnalyzer) loadGlobalConfig() error {
 	if err != nil {
 		return err
 	}
-	os.Setenv("JUICEFS_CONFIG_NAME", configName)
+	os.Setenv(config.EnvJuicefsConfigName, configName)
 
 	return jConfig.LoadFromConfigMap(context.TODO(), d.k8sClient)
 }
@@ -110,9 +110,9 @@ func (d *DiffAnalyzer) loadGlobalConfig() error {
 func getGlobalConfigName(clientSet kubernetes.Interface) (string, error) {
 	daemonSet, err := clientSet.AppsV1().DaemonSets(config.MountNamespace).Get(context.Background(), "juicefs-csi-node", metav1.GetOptions{})
 	if err != nil {
-		return "juicefs-csi-driver-config", nil
+		return config.DefaultJuicefsConfigName, nil
 	}
-	return getEnvFromDaemonSet(daemonSet, "JUICEFS_CONFIG_NAME", "juicefs-csi-driver-config"), nil
+	return getEnvFromDaemonSet(daemonSet, config.EnvJuicefsConfigName, config.DefaultJuicefsConfigName), nil
 }
 
 func (d *DiffAnalyzer) generatePodsDiff(nodeName, uniqueId string) error {

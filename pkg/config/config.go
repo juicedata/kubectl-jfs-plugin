@@ -33,4 +33,12 @@ const (
 	MountContainerName  = "jfs-mount"
 
 	PodMountBase = "/jfs"
+
+	// Environment variables
+	EnvDashboardImage           = "DASHBOARD_IMAGE"
+	EnvJuicefsDashboardSA       = "JUICEFS_CSI_DASHBOARD_SA"
+	EnvBatchUpgradeTimeout      = "BATCH_UPGRADE_TIMEOUT_SECONDS"
+	EnvJuicefsConfigName        = "JUICEFS_CONFIG_NAME"
+	DefaultJuicefsConfigName    = "juicefs-csi-driver-config"
+	DefaultJuicefsDashboardSA   = "juicefs-csi-dashboard-sa"
 )

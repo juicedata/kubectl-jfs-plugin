@@ -96,16 +96,16 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 		return err
 	}
 	// set dashboard sa and image in env
-	dashboardImage := os.Getenv("DASHBOARD_IMAGE")
-	dashboardSA := os.Getenv("JUICEFS_CSI_DASHBOARD_SA")
+	dashboardImage := os.Getenv(config.EnvDashboardImage)
+	dashboardSA := os.Getenv(config.EnvJuicefsDashboardSA)
 
 	if dashboardImage == "" || dashboardSA == "" {
 		dashboardDeployment, err := util.GetCSIDashboardDeployment(d.clientSet)
 		if err != nil {
 			return err
 		}
-		os.Setenv("JUICEFS_CSI_DASHBOARD_SA", getEnvFromDeployment(dashboardDeployment, "JUICEFS_CSI_DASHBOARD_SA", "juicefs-csi-dashboard-sa"))
-		os.Setenv("DASHBOARD_IMAGE", getEnvFromDeployment(dashboardDeployment, "DASHBOARD_IMAGE", getImageFromDeployment(dashboardDeployment)))
+		os.Setenv(config.EnvJuicefsDashboardSA, getEnvFromDeployment(dashboardDeployment, config.EnvJuicefsDashboardSA, config.DefaultJuicefsDashboardSA))
+		os.Setenv(config.EnvDashboardImage, getEnvFromDeployment(dashboardDeployment, config.EnvDashboardImage, getImageFromDeployment(dashboardDeployment)))
 	}
 
 	// create job
@@ -230,17 +230,17 @@ func getImageFromDeployment(deployment *appsv1.Deployment) string {
 }
 
 func addBatchUpgradeTimeoutEnv(job *batchv1.Job) {
-	timeout := os.Getenv("BATCH_UPGRADE_TIMEOUT")
+	timeout := os.Getenv(config.EnvBatchUpgradeTimeout)
 	if timeout == "" || job == nil || len(job.Spec.Template.Spec.Containers) == 0 {
 		return
 	}
 	envs := job.Spec.Template.Spec.Containers[0].Env
 	for i := range envs {
-		if envs[i].Name == "BATCH_UPGRADE_TIMEOUT" {
+		if envs[i].Name == config.EnvBatchUpgradeTimeout {
 			envs[i].Value = timeout
 			job.Spec.Template.Spec.Containers[0].Env = envs
 			return
 		}
 	}
-	job.Spec.Template.Spec.Containers[0].Env = append(envs, corev1.EnvVar{Name: "BATCH_UPGRADE_TIMEOUT", Value: timeout})
+	job.Spec.Template.Spec.Containers[0].Env = append(envs, corev1.EnvVar{Name: config.EnvBatchUpgradeTimeout, Value: timeout})
 }
