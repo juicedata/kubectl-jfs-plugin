@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
@@ -110,7 +111,9 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 
 	// create job
 	newJob := dashboard.NewUpgradeJob(jobName)
-	addBatchUpgradeTimeoutEnv(newJob)
+	if err := addBatchUpgradeTimeoutEnv(newJob); err != nil {
+		return err
+	}
 	job, err := d.clientSet.BatchV1().Jobs(newJob.Namespace).Create(context.TODO(), newJob, metav1.CreateOptions{})
 	if err != nil {
 		return err
@@ -229,18 +232,22 @@ func getImageFromDeployment(deployment *appsv1.Deployment) string {
 	return deployment.Spec.Template.Spec.Containers[0].Image
 }
 
-func addBatchUpgradeTimeoutEnv(job *batchv1.Job) {
+func addBatchUpgradeTimeoutEnv(job *batchv1.Job) error {
 	timeout := os.Getenv(config.EnvBatchUpgradeTimeout)
 	if timeout == "" || job == nil || len(job.Spec.Template.Spec.Containers) == 0 {
-		return
+		return nil
+	}
+	if _, err := strconv.Atoi(timeout); err != nil {
+		return fmt.Errorf("%s must be an integer, got %q", config.EnvBatchUpgradeTimeout, timeout)
 	}
 	envs := job.Spec.Template.Spec.Containers[0].Env
 	for i := range envs {
 		if envs[i].Name == config.EnvBatchUpgradeTimeout {
 			envs[i].Value = timeout
 			job.Spec.Template.Spec.Containers[0].Env = envs
-			return
+			return nil
 		}
 	}
 	job.Spec.Template.Spec.Containers[0].Env = append(envs, corev1.EnvVar{Name: config.EnvBatchUpgradeTimeout, Value: timeout})
+	return nil
 }

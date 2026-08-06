@@ -18,9 +18,11 @@ package batch
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/juicedata/juicefs-csi-driver/pkg/dashboard"
+	"github.com/juicedata/kubectl-jfs-plugin/pkg/config"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -71,7 +73,7 @@ func TestUniqueIdFromPV(t *testing.T) {
 }
 
 func TestAddBatchUpgradeTimeoutEnv(t *testing.T) {
-	t.Setenv("BATCH_UPGRADE_TIMEOUT", "30m")
+	t.Setenv(config.EnvBatchUpgradeTimeout, "1800")
 
 	job := &batchv1.Job{
 		Spec: batchv1.JobSpec{
@@ -86,15 +88,38 @@ func TestAddBatchUpgradeTimeoutEnv(t *testing.T) {
 		},
 	}
 
-	addBatchUpgradeTimeoutEnv(job)
+	if err := addBatchUpgradeTimeoutEnv(job); err != nil {
+		t.Fatalf("add batch upgrade timeout env: %v", err)
+	}
 
 	got := job.Spec.Template.Spec.Containers[0].Env
 	want := []corev1.EnvVar{
 		{Name: "SYS_NAMESPACE", Value: "kube-system"},
-		{Name: "BATCH_UPGRADE_TIMEOUT", Value: "30m"},
+		{Name: config.EnvBatchUpgradeTimeout, Value: "1800"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("job env mismatch, got %#v want %#v", got, want)
+	}
+}
+
+func TestAddBatchUpgradeTimeoutEnvRejectsNonInteger(t *testing.T) {
+	t.Setenv(config.EnvBatchUpgradeTimeout, "30m")
+	job := &batchv1.Job{
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "juicefs-upgrade"}},
+				},
+			},
+		},
+	}
+
+	err := addBatchUpgradeTimeoutEnv(job)
+	if err == nil {
+		t.Fatal("expected error when timeout env is not an integer")
+	}
+	if !strings.Contains(err.Error(), config.EnvBatchUpgradeTimeout) {
+		t.Fatalf("error should mention env var %q, got %v", config.EnvBatchUpgradeTimeout, err)
 	}
 }
 
