@@ -20,11 +20,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
 	"github.com/juicedata/juicefs-csi-driver/pkg/dashboard"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -95,20 +97,23 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 		return err
 	}
 	// set dashboard sa and image in env
-	dashboardImage := os.Getenv("DASHBOARD_IMAGE")
-	dashboardSA := os.Getenv("JUICEFS_CSI_DASHBOARD_SA")
+	dashboardImage := os.Getenv(config.EnvDashboardImage)
+	dashboardSA := os.Getenv(config.EnvJuicefsDashboardSA)
 
 	if dashboardImage == "" || dashboardSA == "" {
 		dashboardDeployment, err := util.GetCSIDashboardDeployment(d.clientSet)
 		if err != nil {
 			return err
 		}
-		os.Setenv("JUICEFS_CSI_DASHBOARD_SA", getEnvFromDeployment(dashboardDeployment, "JUICEFS_CSI_DASHBOARD_SA", "juicefs-csi-dashboard-sa"))
-		os.Setenv("DASHBOARD_IMAGE", getEnvFromDeployment(dashboardDeployment, "DASHBOARD_IMAGE", getImageFromDeployment(dashboardDeployment)))
+		os.Setenv(config.EnvJuicefsDashboardSA, getEnvFromDeployment(dashboardDeployment, config.EnvJuicefsDashboardSA, config.DefaultJuicefsDashboardSA))
+		os.Setenv(config.EnvDashboardImage, getEnvFromDeployment(dashboardDeployment, config.EnvDashboardImage, getImageFromDeployment(dashboardDeployment)))
 	}
 
 	// create job
 	newJob := dashboard.NewUpgradeJob(jobName)
+	if err := addBatchUpgradeTimeoutEnv(newJob); err != nil {
+		return err
+	}
 	job, err := d.clientSet.BatchV1().Jobs(newJob.Namespace).Create(context.TODO(), newJob, metav1.CreateOptions{})
 	if err != nil {
 		return err
@@ -225,4 +230,24 @@ func getImageFromDeployment(deployment *appsv1.Deployment) string {
 		return ""
 	}
 	return deployment.Spec.Template.Spec.Containers[0].Image
+}
+
+func addBatchUpgradeTimeoutEnv(job *batchv1.Job) error {
+	timeout := os.Getenv(config.EnvBatchUpgradeTimeout)
+	if timeout == "" || job == nil || len(job.Spec.Template.Spec.Containers) == 0 {
+		return nil
+	}
+	if _, err := strconv.Atoi(timeout); err != nil {
+		return fmt.Errorf("%s must be an integer, got %q", config.EnvBatchUpgradeTimeout, timeout)
+	}
+	envs := job.Spec.Template.Spec.Containers[0].Env
+	for i := range envs {
+		if envs[i].Name == config.EnvBatchUpgradeTimeout {
+			envs[i].Value = timeout
+			job.Spec.Template.Spec.Containers[0].Env = envs
+			return nil
+		}
+	}
+	job.Spec.Template.Spec.Containers[0].Env = append(envs, corev1.EnvVar{Name: config.EnvBatchUpgradeTimeout, Value: timeout})
+	return nil
 }

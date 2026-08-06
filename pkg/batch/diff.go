@@ -28,6 +28,7 @@ import (
 	"github.com/juicedata/juicefs-csi-driver/pkg/dashboard"
 	"github.com/juicedata/juicefs-csi-driver/pkg/k8sclient"
 	"github.com/juicedata/juicefs-csi-driver/pkg/util/resource"
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -97,13 +98,21 @@ func NewDiffAnalyzer(clientSet *kubernetes.Clientset, conf *rest.Config) (*DiffA
 
 func (d *DiffAnalyzer) loadGlobalConfig() error {
 	// load config
-	csiNodes, err := util.GetCSINodeList(d.clientSet, "")
+	configName, err := getGlobalConfigName(d.clientSet)
 	if err != nil {
 		return err
 	}
-	os.Setenv("JUICEFS_CONFIG_NAME", getEnvFromPod(&csiNodes[0], "JUICEFS_CONFIG_NAME", "juicefs-csi-driver-config"))
+	os.Setenv(config.EnvJuicefsConfigName, configName)
 
 	return jConfig.LoadFromConfigMap(context.TODO(), d.k8sClient)
+}
+
+func getGlobalConfigName(clientSet kubernetes.Interface) (string, error) {
+	daemonSet, err := clientSet.AppsV1().DaemonSets(config.MountNamespace).Get(context.Background(), "juicefs-csi-node", metav1.GetOptions{})
+	if err != nil {
+		return config.DefaultJuicefsConfigName, nil
+	}
+	return getEnvFromDaemonSet(daemonSet, config.EnvJuicefsConfigName, config.DefaultJuicefsConfigName), nil
 }
 
 func (d *DiffAnalyzer) generatePodsDiff(nodeName, uniqueId string) error {
@@ -221,4 +230,16 @@ func (d *DiffAnalyzer) printDiff() (string, error) {
 		}
 		return nil
 	})
+}
+
+func getEnvFromDaemonSet(daemonSet *appsv1.DaemonSet, key string, defaultVal string) string {
+	if daemonSet == nil || len(daemonSet.Spec.Template.Spec.Containers) == 0 {
+		return defaultVal
+	}
+	for _, env := range daemonSet.Spec.Template.Spec.Containers[0].Env {
+		if env.Name == key {
+			return env.Value
+		}
+	}
+	return defaultVal
 }
