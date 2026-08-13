@@ -193,7 +193,7 @@ func (d *DiffAnalyzer) describe() (string, error) {
 		}
 		w.Write(kdescribe.LEVEL_0, "Success:\t%s\n", fmt.Sprintf("%d/%d", d.success, d.total))
 
-		cmd := fmt.Sprintf("kubectl logs %s -n %s", d.podOfJob.Name, config.MountNamespace)
+		cmd := fmt.Sprintf("kubectl logs %s -n %s -f", d.podOfJob.Name, config.MountNamespace)
 		w.Write(kdescribe.LEVEL_0, "Get logs of job:\t%s\n", cmd)
 
 		if d.total > 0 {
