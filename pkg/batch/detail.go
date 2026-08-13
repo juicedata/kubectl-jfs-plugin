@@ -18,7 +18,6 @@ package batch
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"regexp"
@@ -87,14 +86,7 @@ func (d *DiffAnalyzer) LoadUpgradeConfig(ctx context.Context, configName string)
 		return nil, err
 	}
 
-	cfg := &jConfig.BatchConfig{}
-
-	err = json.Unmarshal([]byte(cm.Data["upgrade"]), cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	return cfg, nil
+	return jConfig.LoadBatchConfig(cm)
 }
 
 func (d *DiffAnalyzer) getPVCOfUpgradeJob(conf *jConfig.BatchConfig) (*corev1.PersistentVolumeClaim, error) {
