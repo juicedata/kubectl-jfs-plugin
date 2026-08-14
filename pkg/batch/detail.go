@@ -18,7 +18,6 @@ package batch
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"regexp"
@@ -87,14 +86,7 @@ func (d *DiffAnalyzer) LoadUpgradeConfig(ctx context.Context, configName string)
 		return nil, err
 	}
 
-	cfg := &jConfig.BatchConfig{}
-
-	err = json.Unmarshal([]byte(cm.Data["upgrade"]), cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	return cfg, nil
+	return jConfig.LoadBatchConfig(cm)
 }
 
 func (d *DiffAnalyzer) getPVCOfUpgradeJob(conf *jConfig.BatchConfig) (*corev1.PersistentVolumeClaim, error) {
@@ -201,7 +193,7 @@ func (d *DiffAnalyzer) describe() (string, error) {
 		}
 		w.Write(kdescribe.LEVEL_0, "Success:\t%s\n", fmt.Sprintf("%d/%d", d.success, d.total))
 
-		cmd := fmt.Sprintf("kubectl logs %s -n %s", d.podOfJob.Name, config.MountNamespace)
+		cmd := fmt.Sprintf("kubectl logs %s -n %s -f", d.podOfJob.Name, config.MountNamespace)
 		w.Write(kdescribe.LEVEL_0, "Get logs of job:\t%s\n", cmd)
 
 		if d.total > 0 {
