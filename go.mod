@@ -3,7 +3,7 @@ module github.com/juicedata/kubectl-jfs-plugin
 go 1.25.0
 
 require (
-	github.com/juicedata/juicefs-csi-driver v0.32.3-0.20260813102609-319986e0c769
+	github.com/juicedata/juicefs-csi-driver v0.32.3
 	github.com/sergi/go-diff v1.2.0
 	github.com/spf13/cobra v1.9.1
 	k8s.io/api v0.32.2
