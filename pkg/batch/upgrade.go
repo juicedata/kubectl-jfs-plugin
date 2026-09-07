@@ -23,18 +23,29 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/juicedata/juicefs-csi-driver/pkg/common"
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
 	"github.com/juicedata/juicefs-csi-driver/pkg/dashboard"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/juicedata/kubectl-jfs-plugin/pkg/config"
 	"github.com/juicedata/kubectl-jfs-plugin/pkg/util"
 )
 
-func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignoreErr bool, quiet bool) error {
+func (d *DiffAnalyzer) NewUpgradeJob(opts UpgradeOptions) error {
+	if err := opts.Validate(); err != nil {
+		return err
+	}
+	if opts.Sidecar {
+		return d.newSidecarUpgradeJob(opts)
+	}
+	pvcName, nodeName, worker, ignoreErr, quiet := opts.PVCName, opts.NodeName, opts.Worker, opts.IgnoreError, opts.Quiet
 	jobName := dashboard.GenUpgradeJobName()
 	cmName := dashboard.GenUpgradeConfig(jobName)
 	csiNodes, err := util.GetCSINodeList(d.clientSet, nodeName)
@@ -91,10 +102,100 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 		}
 	}
 
-	// create configMap of upgrade job
-	cfg, err := jConfig.CreateUpgradeConfig(context.TODO(), d.k8sClient, cmName, batchjConfig)
+	job, err := d.createUpgradeJob(batchjConfig, jobName, cmName)
 	if err != nil {
 		return err
+	}
+	d.printUpgradeJobDetailCommand(job)
+	return nil
+}
+
+func (d *DiffAnalyzer) newSidecarUpgradeJob(opts UpgradeOptions) error {
+	jobName := dashboard.GenUpgradeJobName()
+	cmName := dashboard.GenUpgradeConfig(jobName)
+
+	targets, err := d.listSidecarUpgradeTargets(context.TODO(), opts.Namespace, opts.NodeName)
+	if err != nil {
+		return err
+	}
+	targets, skippedTargets, err := jConfig.FilterTargetsNotInOngoingUpgrade(context.TODO(), d.k8sClient, targets)
+	if err != nil {
+		return err
+	}
+	if len(skippedTargets) > 0 {
+		names := make([]string, 0, len(skippedTargets))
+		for _, target := range skippedTargets {
+			names = append(names, sidecarTargetDisplayName(target))
+		}
+		fmt.Printf("Skip %d sidecars already in ongoing upgrade jobs: %s\n", len(names), strings.Join(names, ", "))
+	}
+
+	batchConfig := jConfig.NewBatchConfigForSidecars(targets, opts.Worker, opts.IgnoreError, opts.Namespace)
+	batchConfig.Node = opts.NodeName
+	if len(batchConfig.Batches) == 0 {
+		return fmt.Errorf("no sidecar needs to upgrade")
+	}
+
+	fmt.Println("The following sidecars will be upgraded:")
+	for _, batch := range batchConfig.Batches {
+		for _, target := range batch {
+			fmt.Printf("%s\t%s\t%s\t%s\n", target.Namespace, target.Name, target.ContainerName, target.Node)
+		}
+	}
+	if !opts.Quiet {
+		fmt.Print("Please confirm (y/n): ")
+		if confirm := util.WaitForConfirm(); !confirm {
+			fmt.Println("Upgrade job canceled")
+			return nil
+		}
+	}
+
+	job, err := d.createUpgradeJob(batchConfig, jobName, cmName)
+	if err != nil {
+		return err
+	}
+	d.printUpgradeJobDetailCommand(job)
+	return nil
+}
+
+func (d *DiffAnalyzer) listSidecarUpgradeTargets(ctx context.Context, namespace, nodeName string) ([]jConfig.UpgradeTarget, error) {
+	podSelector := labels.SelectorFromSet(map[string]string{common.InjectSidecarDone: common.True})
+	podOptions := metav1.ListOptions{LabelSelector: podSelector.String()}
+	if nodeName != "" {
+		podOptions.FieldSelector = fields.OneTermEqualSelector("spec.nodeName", nodeName).String()
+	}
+	pods, err := d.clientSet.CoreV1().Pods(namespace).List(ctx, podOptions)
+	if err != nil {
+		return nil, err
+	}
+
+	pvcs, err := d.clientSet.CoreV1().PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	pvcMap := make(map[string]corev1.PersistentVolumeClaim, len(pvcs.Items))
+	for _, pvc := range pvcs.Items {
+		pvcMap[pvc.Name] = pvc
+	}
+
+	secretSelector := labels.SelectorFromSet(map[string]string{common.JuicefsSecretLabelKey: common.True})
+	secrets, err := d.clientSet.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{LabelSelector: secretSelector.String()})
+	if err != nil {
+		return nil, err
+	}
+	secretMap := make(map[types.NamespacedName]corev1.Secret, len(secrets.Items))
+	for _, secret := range secrets.Items {
+		secretMap[types.NamespacedName{Name: secret.Name, Namespace: secret.Namespace}] = secret
+	}
+
+	targets, _, err := jConfig.SelectSidecarUpgradeTargets(pods.Items, pvcMap, secretMap)
+	return targets, err
+}
+
+func (d *DiffAnalyzer) createUpgradeJob(batchConfig *jConfig.BatchConfig, jobName, cmName string) (*batchv1.Job, error) {
+	cfg, err := jConfig.CreateUpgradeConfig(context.TODO(), d.k8sClient, cmName, batchConfig)
+	if err != nil {
+		return nil, err
 	}
 	// set dashboard sa and image in env
 	dashboardImage := os.Getenv(config.EnvDashboardImage)
@@ -103,36 +204,38 @@ func (d *DiffAnalyzer) NewUpgradeJob(pvcName, nodeName string, worker int, ignor
 	if dashboardImage == "" || dashboardSA == "" {
 		dashboardDeployment, err := util.GetCSIDashboardDeployment(d.clientSet)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		os.Setenv(config.EnvJuicefsDashboardSA, getEnvFromDeployment(dashboardDeployment, config.EnvJuicefsDashboardSA, config.DefaultJuicefsDashboardSA))
-		os.Setenv(config.EnvDashboardImage, getEnvFromDeployment(dashboardDeployment, config.EnvDashboardImage, getImageFromDeployment(dashboardDeployment)))
+		dashboardImage, dashboardSA = resolveDashboardJobEnvironment(dashboardDeployment, dashboardImage, dashboardSA)
+		os.Setenv(config.EnvJuicefsDashboardSA, dashboardSA)
+		os.Setenv(config.EnvDashboardImage, dashboardImage)
 	}
 
 	// create job
 	newJob := dashboard.NewUpgradeJob(jobName)
 	if err := addBatchUpgradeTimeoutEnv(newJob); err != nil {
-		return err
+		return nil, err
 	}
 	job, err := d.clientSet.BatchV1().Jobs(newJob.Namespace).Create(context.TODO(), newJob, metav1.CreateOptions{})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if cfg, err = d.clientSet.CoreV1().ConfigMaps(cfg.Namespace).Get(context.TODO(), cfg.Name, metav1.GetOptions{}); err != nil {
-		return err
+		return nil, err
 	}
 	dashboard.SetJobAsConfigMapOwner(cfg, job)
 	if _, err := d.clientSet.CoreV1().ConfigMaps(cfg.Namespace).Update(context.TODO(), cfg, metav1.UpdateOptions{}); err != nil {
-		return err
+		return nil, err
 	}
+	return job, nil
+}
 
-	// print describe cmd
+func (d *DiffAnalyzer) printUpgradeJobDetailCommand(job *batchv1.Job) {
 	detailCmd := fmt.Sprintf("kubectl jfs batch describe %s", job.Name)
 	if config.MountNamespace != "kube-system" {
 		detailCmd = fmt.Sprintf("%s -m %s", detailCmd, config.MountNamespace)
 	}
 	fmt.Printf("Job for batch upgrade created: %s, please execute the following command to see details:\n%s\n", job.Name, detailCmd)
-	return nil
 }
 
 func (d *DiffAnalyzer) filterPodsInOngoingUpgradeJobs() ([]string, error) {
@@ -230,6 +333,16 @@ func getImageFromDeployment(deployment *appsv1.Deployment) string {
 		return ""
 	}
 	return deployment.Spec.Template.Spec.Containers[0].Image
+}
+
+func resolveDashboardJobEnvironment(deployment *appsv1.Deployment, image, serviceAccount string) (string, string) {
+	if image == "" {
+		image = getEnvFromDeployment(deployment, config.EnvDashboardImage, getImageFromDeployment(deployment))
+	}
+	if serviceAccount == "" {
+		serviceAccount = getEnvFromDeployment(deployment, config.EnvJuicefsDashboardSA, config.DefaultJuicefsDashboardSA)
+	}
+	return image, serviceAccount
 }
 
 func addBatchUpgradeTimeoutEnv(job *batchv1.Job) error {
