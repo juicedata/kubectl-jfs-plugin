@@ -25,6 +25,42 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
+func TestGetPodStatusIgnoresStartedNativeSidecar(t *testing.T) {
+	always := corev1.ContainerRestartPolicyAlways
+	started := true
+	pod := corev1.Pod{
+		Spec: corev1.PodSpec{
+			InitContainers: []corev1.Container{{
+				Name:          "jfs-mount",
+				RestartPolicy: &always,
+			}},
+			Containers: []corev1.Container{{Name: "app"}},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{
+				Type:   corev1.PodReady,
+				Status: corev1.ConditionTrue,
+			}},
+			InitContainerStatuses: []corev1.ContainerStatus{{
+				Name:    "jfs-mount",
+				Started: &started,
+				Ready:   true,
+				State:   corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			}},
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:  "app",
+				Ready: true,
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			}},
+		},
+	}
+
+	if got, want := GetPodStatus(pod), "Running"; got != want {
+		t.Fatalf("GetPodStatus() = %q, want %q", got, want)
+	}
+}
+
 func TestGetShareMountModes(t *testing.T) {
 	pods := []corev1.Pod{
 		{

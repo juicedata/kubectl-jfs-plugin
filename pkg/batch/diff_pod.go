@@ -62,9 +62,24 @@ func (d *DiffAnalyzer) DiffPod(podName string) error {
 	return nil
 }
 
+// ensureMountPod guards against the panic reported when `batch diff <pod-name>`
+// (without --sidecar) is mistakenly pointed at an application pod (e.g. one
+// with an injected sidecar) instead of a real juicefs-mount pod. Application
+// pods don't carry a mount command, so the vendored parser used to index out
+// of range; we now fail fast with a clear error instead.
+func ensureMountPod(pod *corev1.Pod) error {
+	if pod.Labels[common.PodTypeKey] != common.PodTypeValue {
+		return fmt.Errorf("pod %s/%s is not a juicefs mount pod, use --sidecar if it is an application pod with an injected sidecar", pod.Namespace, pod.Name)
+	}
+	return nil
+}
+
 func (d *DiffAnalyzer) generatePodDiff(podName string) (*dashboard.PodDiff, error) {
 	pod, err := d.clientSet.CoreV1().Pods(config.MountNamespace).Get(context.Background(), podName, metav1.GetOptions{})
 	if err != nil {
+		return nil, err
+	}
+	if err := ensureMountPod(pod); err != nil {
 		return nil, err
 	}
 

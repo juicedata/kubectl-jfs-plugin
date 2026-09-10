@@ -17,8 +17,10 @@
 package batch
 
 import (
+	"strings"
 	"testing"
 
+	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,6 +28,54 @@ import (
 
 	"github.com/juicedata/kubectl-jfs-plugin/pkg/config"
 )
+
+func TestPrintSidecarDiff(t *testing.T) {
+	analyzer := &DiffAnalyzer{
+		sidecarTargets: []jConfig.UpgradeTarget{{
+			Namespace:     "app",
+			Name:          "workload",
+			ContainerName: "jfs-mount",
+			Node:          "node-a",
+		}},
+	}
+
+	out, err := analyzer.printSidecarDiff()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"NAMESPACE", "POD", "CONTAINER", "NODE", "app", "workload", "jfs-mount", "node-a"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q: %s", want, out)
+		}
+	}
+}
+
+func TestPrintSidecarPodImageDiff(t *testing.T) {
+	imageDiffs := map[string]jConfig.SidecarImageDiff{
+		"workload/jfs-mount": {
+			CurrentImage: "registry.example/mount:v1",
+			TargetImage:  "registry.example/mount:v2",
+		},
+	}
+
+	out, err := printSidecarPodImageDiff("app", "workload", imageDiffs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Image diff of sidecars in pod [app/workload]:",
+		"CONTAINER",
+		"CURRENT IMAGE",
+		"TARGET IMAGE",
+		"jfs-mount",
+		"registry.example/mount:v1",
+		"registry.example/mount:v2",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q: %s", want, out)
+		}
+	}
+}
 
 func TestGetGlobalConfigNameFallsBackToDaemonSet(t *testing.T) {
 	oldNamespace := config.MountNamespace

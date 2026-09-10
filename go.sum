@@ -127,8 +127,10 @@ github.com/json-iterator/go v1.1.12 h1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnr
 github.com/json-iterator/go v1.1.12/go.mod h1:e30LSqwooZae/UwlEbR2852Gd8hjQvJoHmT4TnhNGBo=
 github.com/jtolds/gls v4.20.0+incompatible h1:xdiiI2gbIgH/gLH7ADydsJ1uDOEzR8yvV7C0MuV77Wo=
 github.com/jtolds/gls v4.20.0+incompatible/go.mod h1:QJZ7F/aHp+rZTRtaJ1ow/lLfFfVYBRgL+9YlvaHOwJU=
-github.com/juicedata/juicefs-csi-driver v0.32.3 h1:WjfRrQykk5ShtBIG8idiS1GcTAmxfhG4i3k7Ohluo/I=
-github.com/juicedata/juicefs-csi-driver v0.32.3/go.mod h1:Y6WYTCHlHb4MMmm4uXvAeAUdMtwjW4YuhdFmGwXMpY0=
+github.com/juicedata/juicefs-csi-driver v0.32.6-0.20260908043024-ce428b2e2377 h1:4D9LOtIIcsrm/bc3gGmgx8ZuDh8s9Yt+9mgcrSlf2as=
+github.com/juicedata/juicefs-csi-driver v0.32.6-0.20260908043024-ce428b2e2377/go.mod h1:Y6WYTCHlHb4MMmm4uXvAeAUdMtwjW4YuhdFmGwXMpY0=
+github.com/juicedata/juicefs-csi-driver v0.32.6-0.20260910053023-c5bf29548b07 h1:nl4VjlrYhbndJZaVtofe87BrQLJlaEiqaDh1+KqOLfA=
+github.com/juicedata/juicefs-csi-driver v0.32.6-0.20260910053023-c5bf29548b07/go.mod h1:Y6WYTCHlHb4MMmm4uXvAeAUdMtwjW4YuhdFmGwXMpY0=
 github.com/juicedata/juicefs-operator v0.9.0 h1:/NCfCvNqjk/dL3tC4RfSdryyeXvpMQJv0xxtdtQTx30=
 github.com/juicedata/juicefs-operator v0.9.0/go.mod h1:9tTG66FAoIw9wChum++oa3aePYlxP2r4ZCqqsEDV0xA=
 github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI2bnpBCr8=

@@ -50,9 +50,11 @@ func (d *DiffAnalyzer) GetDetailOfJob(jobName string) error {
 		return err
 	}
 	d.conf = conf
-	d.pvc, err = d.getPVCOfUpgradeJob(conf)
-	if err != nil {
-		return err
+	if conf.Kind == jConfig.UpgradeKindMountPod {
+		d.pvc, err = d.getPVCOfUpgradeJob(conf)
+		if err != nil {
+			return err
+		}
 	}
 	total := 0
 	for _, batch := range conf.Batches {
@@ -64,8 +66,10 @@ func (d *DiffAnalyzer) GetDetailOfJob(jobName string) error {
 		return err
 	}
 
-	if err := d.generatePodsDiffOfConf(conf); err != nil {
-		return err
+	if conf.Kind == jConfig.UpgradeKindMountPod {
+		if err := d.generatePodsDiffOfConf(conf); err != nil {
+			return err
+		}
 	}
 
 	output, err := d.describe()
@@ -90,7 +94,7 @@ func (d *DiffAnalyzer) LoadUpgradeConfig(ctx context.Context, configName string)
 }
 
 func (d *DiffAnalyzer) getPVCOfUpgradeJob(conf *jConfig.BatchConfig) (*corev1.PersistentVolumeClaim, error) {
-	if conf == nil {
+	if conf == nil || conf.UniqueId == "" {
 		return nil, nil
 	}
 	for _, batch := range conf.Batches {
@@ -127,46 +131,45 @@ func (d *DiffAnalyzer) record() error {
 	}
 	msg := string(logs)
 
-	podsStatus := make(map[string]jConfig.UpgradeStatus)
-
-	runningRegex := `POD-START \[([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)\]`
-	runningRe := regexp.MustCompile(runningRegex)
-
-	runningMatches := runningRe.FindAllStringSubmatch(msg, -1)
-	for _, match := range runningMatches {
-		podName := match[1]
-		podsStatus[podName] = jConfig.Running
-	}
-
-	successRegex := `POD-SUCCESS \[([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)\]`
-	successRe := regexp.MustCompile(successRegex)
-
-	successMatches := successRe.FindAllStringSubmatch(msg, -1)
-	for _, match := range successMatches {
-		podName := match[1]
-		podsStatus[podName] = jConfig.Success
-		d.success++
-	}
-
-	failRegex := `POD-FAIL \[([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)\]`
-	failRe := regexp.MustCompile(failRegex)
-
-	failMatches := failRe.FindAllStringSubmatch(msg, -1)
-	for _, match := range failMatches {
-		podName := match[1]
-		podsStatus[podName] = jConfig.Fail
-	}
+	podsStatus, success := parseUpgradeStatuses(msg)
+	d.success = success
 
 	for i := range d.conf.Batches {
-		batch := d.conf.Batches[i]
-		for j := range batch {
-			po := batch[j]
-			if status, ok := podsStatus[po.Name]; ok {
+		for j := range d.conf.Batches[i] {
+			po := d.conf.Batches[i][j]
+			key := po.Name
+			if d.conf.Kind == jConfig.UpgradeKindSidecar {
+				key = po.Key()
+			}
+			if status, ok := podsStatus[key]; ok {
 				d.conf.Batches[i][j].Status = status
 			}
 		}
 	}
 	return nil
+}
+
+func parseUpgradeStatuses(logs string) (map[string]jConfig.UpgradeStatus, int) {
+	statuses := make(map[string]jConfig.UpgradeStatus)
+	re := regexp.MustCompile(`POD-(START|SUCCESS|FAIL) \[([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*(\/[a-z0-9]([-a-z0-9]*[a-z0-9])?)?)\]`)
+	for _, match := range re.FindAllStringSubmatch(logs, -1) {
+		switch match[1] {
+		case "START":
+			statuses[match[2]] = jConfig.Running
+		case "SUCCESS":
+			statuses[match[2]] = jConfig.Success
+		case "FAIL":
+			statuses[match[2]] = jConfig.Fail
+		}
+	}
+
+	success := 0
+	for _, status := range statuses {
+		if status == jConfig.Success {
+			success++
+		}
+	}
+	return statuses, success
 }
 
 func (d *DiffAnalyzer) describe() (string, error) {
@@ -180,7 +183,15 @@ func (d *DiffAnalyzer) describe() (string, error) {
 		}
 		w.Write(kdescribe.LEVEL_0, "Duration:\t%s\n", util.GetJobDuration(*d.crtJob))
 
+		kind := d.conf.Kind
+		if kind == "" {
+			kind = jConfig.UpgradeKindMountPod
+		}
+		w.Write(kdescribe.LEVEL_0, "Type:\t%s\n", kind)
 		w.Write(kdescribe.LEVEL_0, "Status:\t%s\n", d.conf.Status)
+		if d.conf.Kind == jConfig.UpgradeKindSidecar {
+			w.Write(kdescribe.LEVEL_0, "Target Namespace:\t%s\n", d.conf.Namespace)
+		}
 		node := d.conf.Node
 		if node == "" {
 			node = "All Nodes"
@@ -197,6 +208,17 @@ func (d *DiffAnalyzer) describe() (string, error) {
 		w.Write(kdescribe.LEVEL_0, "Get logs of job:\t%s\n", cmd)
 
 		if d.total > 0 {
+			if d.conf.Kind == jConfig.UpgradeKindSidecar {
+				w.Write(kdescribe.LEVEL_0, "Sidecars Updated:\n")
+				w.Write(kdescribe.LEVEL_1, "Namespace\tPod\tContainer\tNode\tStatus\n")
+				w.Write(kdescribe.LEVEL_1, "---------\t---\t---------\t----\t------\n")
+				for _, batch := range d.conf.Batches {
+					for _, target := range batch {
+						w.Write(kdescribe.LEVEL_1, "%s\t%s\t%s\t%s\t%s\n", target.Namespace, target.Name, target.ContainerName, target.Node, target.Status)
+					}
+				}
+				return nil
+			}
 			w.Write(kdescribe.LEVEL_0, "Mount Pods Updated:\n")
 			w.Write(kdescribe.LEVEL_1, "Name\tStatus\n")
 			w.Write(kdescribe.LEVEL_1, "----\t------\n")
