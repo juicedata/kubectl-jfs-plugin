@@ -134,6 +134,37 @@ POD-FAIL [workload/jfs-mount-1]`
 	}
 }
 
+func TestParseUpgradeStatusesAcceptsNamespacedSidecarKeys(t *testing.T) {
+	logs := `POD-START [app/workload/jfs-mount]
+POD-SUCCESS [app/workload/jfs-mount]`
+
+	got, success := parseUpgradeStatuses(logs)
+	want := map[string]jConfig.UpgradeStatus{
+		"app/workload/jfs-mount": jConfig.Success,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("statuses = %#v, want %#v", got, want)
+	}
+	if success != 1 {
+		t.Fatalf("success = %d, want 1", success)
+	}
+}
+
+func TestSidecarUpgradeStatusPrefersNamespacedKey(t *testing.T) {
+	target := jConfig.UpgradeTarget{
+		Namespace:     "app",
+		Name:          "workload",
+		ContainerName: "jfs-mount",
+	}
+	status, ok := sidecarUpgradeStatus(map[string]jConfig.UpgradeStatus{
+		"app/workload/jfs-mount": jConfig.Success,
+		"workload/jfs-mount":     jConfig.Fail,
+	}, target)
+	if !ok || status != jConfig.Success {
+		t.Fatalf("status = %q, found = %t, want success", status, ok)
+	}
+}
+
 func TestResolveDashboardJobEnvironmentKeepsExplicitImage(t *testing.T) {
 	deployment := &appsv1.Deployment{
 		Spec: appsv1.DeploymentSpec{

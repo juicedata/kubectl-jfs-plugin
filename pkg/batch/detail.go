@@ -139,9 +139,14 @@ func (d *DiffAnalyzer) record() error {
 			po := d.conf.Batches[i][j]
 			key := po.Name
 			if d.conf.Kind == jConfig.UpgradeKindSidecar {
-				key = po.Key()
+				status, ok := sidecarUpgradeStatus(podsStatus, po)
+				if ok {
+					d.conf.Batches[i][j].Status = status
+				}
+				continue
 			}
-			if status, ok := podsStatus[key]; ok {
+			status, ok := podsStatus[key]
+			if ok {
 				d.conf.Batches[i][j].Status = status
 			}
 		}
@@ -149,9 +154,18 @@ func (d *DiffAnalyzer) record() error {
 	return nil
 }
 
+func sidecarUpgradeStatus(statuses map[string]jConfig.UpgradeStatus, target jConfig.UpgradeTarget) (jConfig.UpgradeStatus, bool) {
+	key := target.Key()
+	if status, ok := statuses[target.Namespace+"/"+key]; ok {
+		return status, true
+	}
+	status, ok := statuses[key]
+	return status, ok
+}
+
 func parseUpgradeStatuses(logs string) (map[string]jConfig.UpgradeStatus, int) {
 	statuses := make(map[string]jConfig.UpgradeStatus)
-	re := regexp.MustCompile(`POD-(START|SUCCESS|FAIL) \[([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*(\/[a-z0-9]([-a-z0-9]*[a-z0-9])?)?)\]`)
+	re := regexp.MustCompile(`POD-(START|SUCCESS|FAIL) \[([^\]]+)\]`)
 	for _, match := range re.FindAllStringSubmatch(logs, -1) {
 		switch match[1] {
 		case "START":
