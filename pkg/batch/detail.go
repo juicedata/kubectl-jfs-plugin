@@ -50,7 +50,7 @@ func (d *DiffAnalyzer) GetDetailOfJob(jobName string) error {
 		return err
 	}
 	d.conf = conf
-	if conf.Kind == jConfig.UpgradeKindMountPod {
+	if conf.Kind == "" || conf.Kind == jConfig.UpgradeKindMountPod {
 		d.pvc, err = d.getPVCOfUpgradeJob(conf)
 		if err != nil {
 			return err
@@ -66,7 +66,7 @@ func (d *DiffAnalyzer) GetDetailOfJob(jobName string) error {
 		return err
 	}
 
-	if conf.Kind == jConfig.UpgradeKindMountPod {
+	if conf.Kind == "" || conf.Kind == jConfig.UpgradeKindMountPod {
 		if err := d.generatePodsDiffOfConf(conf); err != nil {
 			return err
 		}
