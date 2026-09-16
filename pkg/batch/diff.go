@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juicedata/juicefs-csi-driver/pkg/common"
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
 	"github.com/juicedata/juicefs-csi-driver/pkg/dashboard"
 	"github.com/juicedata/juicefs-csi-driver/pkg/k8sclient"
@@ -33,6 +34,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	kdescribe "k8s.io/kubectl/pkg/describe"
@@ -55,6 +58,7 @@ type DiffAnalyzer struct {
 	podsNeedToUpdate []corev1.Pod
 	allPods          []corev1.Pod
 	podDiffs         []dashboard.PodDiff
+	sidecarTargets   []jConfig.UpgradeTarget
 
 	// used in detail
 	crtJob   *batchv1.Job
@@ -221,12 +225,113 @@ func (d *DiffAnalyzer) ListDiffPods(nodeName string) error {
 	return nil
 }
 
+func (d *DiffAnalyzer) ListSidecarDiffPods(namespace, nodeName string) error {
+	if namespace == "" {
+		return fmt.Errorf("--namespace is required with --sidecar")
+	}
+
+	targets, err := d.listSidecarUpgradeTargets(context.TODO(), namespace, nodeName)
+	if err != nil {
+		return err
+	}
+	targets, skippedTargets, err := jConfig.FilterTargetsNotInOngoingUpgrade(context.TODO(), d.k8sClient, targets)
+	if err != nil {
+		return err
+	}
+	if len(skippedTargets) > 0 {
+		names := make([]string, 0, len(skippedTargets))
+		for _, target := range skippedTargets {
+			names = append(names, sidecarTargetDisplayName(target))
+		}
+		fmt.Printf("Skip %d sidecars already in ongoing upgrade jobs: %s\n", len(names), strings.Join(names, ", "))
+	}
+
+	d.sidecarTargets = targets
+	out, err := d.printSidecarDiff()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s\n", out)
+	return nil
+}
+
+func (d *DiffAnalyzer) DiffSidecarPod(namespace, podName string) error {
+	if namespace == "" {
+		return fmt.Errorf("--namespace is required with --sidecar")
+	}
+
+	pod, err := d.clientSet.CoreV1().Pods(namespace).Get(context.TODO(), podName, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	pvcs, err := d.clientSet.CoreV1().PersistentVolumeClaims(namespace).List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+	pvcMap := make(map[string]corev1.PersistentVolumeClaim, len(pvcs.Items))
+	for _, pvc := range pvcs.Items {
+		pvcMap[pvc.Name] = pvc
+	}
+	secretSelector := labels.SelectorFromSet(map[string]string{common.JuicefsSecretLabelKey: common.True})
+	secrets, err := d.clientSet.CoreV1().Secrets(namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: secretSelector.String()})
+	if err != nil {
+		return err
+	}
+	secretMap := make(map[types.NamespacedName]corev1.Secret, len(secrets.Items))
+	for _, secret := range secrets.Items {
+		secretMap[types.NamespacedName{Name: secret.Name, Namespace: secret.Namespace}] = secret
+	}
+
+	out, err := printSidecarPodImageDiff(namespace, podName, jConfig.CollectSidecarImageDiffs([]corev1.Pod{*pod}, pvcMap, secretMap))
+	if err != nil {
+		return err
+	}
+	fmt.Print(out)
+	return nil
+}
+
 func (d *DiffAnalyzer) printDiff() (string, error) {
 	return util.TabbedString(func(out io.Writer) error {
 		w := kdescribe.NewPrefixWriter(out)
 		w.Write(kdescribe.LEVEL_0, "NAME\tNAMESPACE\tNODE\tSTATUS\tAGE\n")
 		for _, diff := range d.podDiffs {
 			w.Write(kdescribe.LEVEL_0, "%s\t%s\t%s\t%s\t%s\n", util.IfNil(diff.Pod.Name), util.IfNil(diff.Pod.Namespace), util.IfNil(diff.Pod.Spec.NodeName), util.IfNil(util.GetPodStatus(diff.Pod)), util.TranslateTimestampSince(diff.Pod.CreationTimestamp))
+		}
+		return nil
+	})
+}
+
+func (d *DiffAnalyzer) printSidecarDiff() (string, error) {
+	return util.TabbedString(func(out io.Writer) error {
+		w := kdescribe.NewPrefixWriter(out)
+		w.Write(kdescribe.LEVEL_0, "NAMESPACE\tPOD\tCONTAINER\tNODE\n")
+		for _, target := range d.sidecarTargets {
+			w.Write(kdescribe.LEVEL_0, "%s\t%s\t%s\t%s\n", target.Namespace, target.Name, target.ContainerName, target.Node)
+		}
+		return nil
+	})
+}
+
+func printSidecarPodImageDiff(namespace, podName string, imageDiffs map[string]jConfig.SidecarImageDiff) (string, error) {
+	keys := make([]string, 0, len(imageDiffs))
+	for key, imageDiff := range imageDiffs {
+		if imageDiff.TargetImage != "" && imageDiff.CurrentImage != imageDiff.TargetImage {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		return "", fmt.Errorf("no sidecar image differences found for pod %s/%s", namespace, podName)
+	}
+	sort.Strings(keys)
+
+	return util.TabbedString(func(out io.Writer) error {
+		w := kdescribe.NewPrefixWriter(out)
+		w.Write(kdescribe.LEVEL_0, "Image diff of sidecars in pod [%s/%s]:\n", namespace, podName)
+		w.Write(kdescribe.LEVEL_0, "CONTAINER\tCURRENT IMAGE\tTARGET IMAGE\n")
+		for _, key := range keys {
+			imageDiff := imageDiffs[key]
+			containerName := strings.TrimPrefix(key, podName+"/")
+			w.Write(kdescribe.LEVEL_0, "%s\t%s\t%s\n", containerName, imageDiff.CurrentImage, imageDiff.TargetImage)
 		}
 		return nil
 	})

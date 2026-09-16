@@ -29,7 +29,7 @@ import (
 	"github.com/juicedata/kubectl-jfs-plugin/pkg/util"
 )
 
-func (d *DiffAnalyzer) ListJobs() error {
+func (d *DiffAnalyzer) ListJobs(sidecarOnly bool) error {
 	jobs, err := util.ListBatchJobs(d.clientSet)
 	if err != nil {
 		return err
@@ -43,7 +43,7 @@ func (d *DiffAnalyzer) ListJobs() error {
 	}
 	d.confList = confList
 
-	out, err := d.printJob()
+	out, err := d.printJob(sidecarOnly)
 	if err != nil {
 		return err
 	}
@@ -61,16 +61,23 @@ func (l JobList) Less(i, j int) bool {
 
 func (l JobList) Swap(i, j int) { l[i], l[j] = l[j], l[i] }
 
-func (d *DiffAnalyzer) printJob() (string, error) {
+func (d *DiffAnalyzer) printJob(sidecarOnly bool) (string, error) {
 	return util.TabbedString(func(out io.Writer) error {
 		w := kdescribe.NewPrefixWriter(out)
-		w.Write(kdescribe.LEVEL_0, "NAME\tNAMESPACE\tSTATUS\tDURATION\tAGE\n")
+		w.Write(kdescribe.LEVEL_0, "NAME\tNAMESPACE\tTYPE\tSTATUS\tDURATION\tAGE\n")
 		for _, job := range d.jobs {
 			status := jConfig.Pending
+			kind := jConfig.UpgradeKindMountPod
 			if conf, ok := d.confList[dashboard.GenUpgradeConfig(job.Name)]; ok {
 				status = conf.Status
+				if conf.Kind != "" {
+					kind = conf.Kind
+				}
 			}
-			w.Write(kdescribe.LEVEL_0, "%s\t%s\t%s\t%s\t%s\n", util.IfNil(job.Name), util.IfNil(job.Namespace), util.IfNil(string(status)), util.GetJobDuration(job), util.TranslateTimestampSince(job.CreationTimestamp))
+			if sidecarOnly && kind != jConfig.UpgradeKindSidecar {
+				continue
+			}
+			w.Write(kdescribe.LEVEL_0, "%s\t%s\t%s\t%s\t%s\t%s\n", util.IfNil(job.Name), util.IfNil(job.Namespace), util.IfNil(string(kind)), util.IfNil(string(status)), util.GetJobDuration(job), util.TranslateTimestampSince(job.CreationTimestamp))
 		}
 		return nil
 	})

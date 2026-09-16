@@ -32,6 +32,7 @@ var (
 	pvcName     string
 	workerNum   int
 	quiet       bool
+	sidecar     bool
 )
 
 var batchCmd = &cobra.Command{
@@ -42,12 +43,18 @@ var batchCmd = &cobra.Command{
 
 var batchDiffCmd = &cobra.Command{
 	Use:   "diff",
-	Short: "show all mount pods that can be upgraded, or show the config diff of a specific mount pod",
+	Short: "show mount pods or sidecars that can be upgraded",
 	Example: `  # show all mount pods that can be upgraded
   kubectl jfs batch diff
 
   # show the config diff of a specific mount pod
   kubectl jfs batch diff <pod-name>
+
+  # show sidecars that need to be upgraded
+  kubectl jfs batch --sidecar diff --namespace <namespace>
+
+   # show image differences for sidecars in one pod
+   kubectl jfs batch --sidecar diff <pod-name> --namespace <namespace>
 `,
 	Run: func(cmd *cobra.Command, args []string) {
 		clientSet, err := util.ClientSet(KubernetesConfigFlags)
@@ -58,7 +65,17 @@ var batchDiffCmd = &cobra.Command{
 		da, err := batch.NewDiffAnalyzer(clientSet, conf)
 		cobra.CheckErr(err)
 
-		if len(args) < 1 {
+		if sidecar {
+			namespace, err := cmd.Flags().GetString("namespace")
+			cobra.CheckErr(err)
+			if len(args) == 0 {
+				cobra.CheckErr(da.ListSidecarDiffPods(namespace, nodeName))
+			} else if len(args) == 1 {
+				cobra.CheckErr(da.DiffSidecarPod(namespace, args[0]))
+			} else {
+				cobra.CheckErr(fmt.Errorf("only one pod name can be used with --sidecar"))
+			}
+		} else if len(args) < 1 {
 			cobra.CheckErr(da.ListDiffPods(nodeName))
 		} else {
 			cobra.CheckErr(da.DiffPod(args[0]))
@@ -79,13 +96,13 @@ var batchListCmd = &cobra.Command{
 
 		da, err := batch.NewDiffAnalyzer(clientSet, conf)
 		cobra.CheckErr(err)
-		cobra.CheckErr(da.ListJobs())
+		cobra.CheckErr(da.ListJobs(sidecar))
 	},
 }
 
 var batchUpgradeCmd = &cobra.Command{
 	Use:   "upgrade",
-	Short: "upgrade mount pods smoothly by batch",
+	Short: "upgrade mount pods or sidecars smoothly by batch",
 	Example: `  # upgrade mount pods smoothly by batch
   kubectl jfs batch upgrade
 
@@ -100,6 +117,9 @@ var batchUpgradeCmd = &cobra.Command{
 
   # ignore error or not during upgrade
   kubectl jfs batch upgrade --ignore-error
+
+  # upgrade sidecars in an application namespace
+  kubectl jfs batch --sidecar upgrade --namespace <namespace>
 `,
 	Run: func(cmd *cobra.Command, args []string) {
 		clientSet, err := util.ClientSet(KubernetesConfigFlags)
@@ -109,7 +129,17 @@ var batchUpgradeCmd = &cobra.Command{
 
 		da, err := batch.NewDiffAnalyzer(clientSet, conf)
 		cobra.CheckErr(err)
-		cobra.CheckErr(da.NewUpgradeJob(pvcName, nodeName, workerNum, ignoreError, quiet))
+		namespace, err := cmd.Flags().GetString("namespace")
+		cobra.CheckErr(err)
+		cobra.CheckErr(da.NewUpgradeJob(batch.UpgradeOptions{
+			PVCName:     pvcName,
+			Namespace:   namespace,
+			NodeName:    nodeName,
+			Worker:      workerNum,
+			IgnoreError: ignoreError,
+			Quiet:       quiet,
+			Sidecar:     sidecar,
+		}))
 	},
 }
 
@@ -219,6 +249,8 @@ var batchDeleteCmd = &cobra.Command{
 }
 
 func init() {
+	batchCmd.PersistentFlags().BoolVar(&sidecar, "sidecar", false, "upgrade or show sidecars")
+	batchDiffCmd.Flags().StringVar(&nodeName, "node", "", "node name")
 	batchUpgradeCmd.Flags().StringVarP(&nodeName, "node", "", "", "node name")
 	batchUpgradeCmd.Flags().BoolVarP(&ignoreError, "ignore-error", "", false, "ignore error")
 	batchUpgradeCmd.Flags().StringVarP(&pvcName, "pvc", "", "", "pvc name")

@@ -21,6 +21,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/juicedata/juicefs-csi-driver/pkg/common"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -86,15 +87,32 @@ type appPod struct {
 }
 
 func (aa *AppAnalyzer) JfsPod() error {
+	aa.collectJfsPods()
+
+	if len(aa.apps) == 0 {
+		fmt.Printf("No pod found using juicefs PVC in %s namespace.\n", aa.ns)
+		return nil
+	}
+
+	out, err := aa.printAppPods()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s\n", out)
+	return nil
+}
+
+func (aa *AppAnalyzer) collectJfsPods() {
 	appPods := make([]appPod, 0, len(aa.pods))
 	for i := 0; i < len(aa.pods); i++ {
 		pod := aa.pods[i]
 
-		if len(pod.Spec.Volumes) == 0 {
+		isSidecarPod := pod.Labels[common.InjectSidecarDone] == common.True
+		if len(pod.Spec.Volumes) == 0 && !isSidecarPod {
 			continue
 		}
 
-		appending := false
+		appending := isSidecarPod
 		po := appPod{
 			namespace: pod.Namespace,
 			name:      pod.Name,
@@ -132,19 +150,7 @@ func (aa *AppAnalyzer) JfsPod() error {
 			appPods = append(appPods, po)
 		}
 	}
-
-	if len(appPods) == 0 {
-		fmt.Printf("No pod found using juicefs PVC in %s namespace.\n", aa.ns)
-		return nil
-	}
-
 	aa.apps = appPods
-	out, err := aa.printAppPods()
-	if err != nil {
-		return err
-	}
-	fmt.Printf("%s\n", out)
-	return nil
 }
 
 func (aa *AppAnalyzer) printAppPods() (string, error) {
