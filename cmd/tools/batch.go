@@ -53,7 +53,7 @@ var batchDiffCmd = &cobra.Command{
   # show sidecars that need to be upgraded
   kubectl jfs batch --sidecar diff --namespace <namespace>
 
-   # show image differences for sidecars in one pod
+   # show image and mount argument differences for sidecars in one pod
    kubectl jfs batch --sidecar diff <pod-name> --namespace <namespace>
 `,
 	Run: func(cmd *cobra.Command, args []string) {

@@ -50,30 +50,41 @@ func TestPrintSidecarDiff(t *testing.T) {
 	}
 }
 
-func TestPrintSidecarPodImageDiff(t *testing.T) {
-	imageDiffs := map[string]jConfig.SidecarImageDiff{
-		"workload/jfs-mount": {
-			CurrentImage: "registry.example/mount:v1",
-			TargetImage:  "registry.example/mount:v2",
+func TestPrintSidecarPodDiff(t *testing.T) {
+	diffs := map[string]jConfig.SidecarUpgradeDiff{
+		"app/workload/jfs-mount": {
+			CurrentImage:     "registry.example/mount:v1",
+			TargetImage:      "registry.example/mount:v2",
+			CurrentMountArgs: []string{"volume", "/jfs/old", "--cache-dir", "/path with space"},
+			TargetMountArgs:  []string{"volume", "/jfs/new", "--cache-dir", "/new path"},
 		},
 	}
 
-	out, err := printSidecarPodImageDiff("app", "workload", imageDiffs)
+	out, err := printSidecarPodDiff("app", "workload", diffs)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"Image diff of sidecars in pod [app/workload]:",
+		"Sidecar differences in pod [app/workload]:",
 		"CONTAINER",
 		"CURRENT IMAGE",
 		"TARGET IMAGE",
+		"CURRENT MOUNT ARGS",
+		"TARGET MOUNT ARGS",
 		"jfs-mount",
 		"registry.example/mount:v1",
 		"registry.example/mount:v2",
+		`["volume","/jfs/old","--cache-dir","/path with space"]`,
+		`["volume","/jfs/new","--cache-dir","/new path"]`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output missing %q: %s", want, out)
 		}
+	}
+
+	_, err = printSidecarPodDiff("app", "workload", map[string]jConfig.SidecarUpgradeDiff{})
+	if err == nil || err.Error() != "no eligible sidecar differences found for pod app/workload" {
+		t.Fatalf("empty diff error = %v", err)
 	}
 }
 
