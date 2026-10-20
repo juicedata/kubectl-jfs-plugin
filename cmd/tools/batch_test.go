@@ -16,9 +16,15 @@
 
 package tools
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestBatchSidecarFlagIsPersistent(t *testing.T) {
+	if !strings.Contains(batchDiffCmd.Example, "show image and mount argument differences for sidecars in one pod") {
+		t.Fatalf("batch diff example = %q, want sidecar image and mount argument wording", batchDiffCmd.Example)
+	}
 	if flag := batchCmd.PersistentFlags().Lookup("sidecar"); flag == nil {
 		t.Fatal("batch --sidecar persistent flag is not registered")
 	}
@@ -27,5 +33,13 @@ func TestBatchSidecarFlagIsPersistent(t *testing.T) {
 	}
 	if flag := batchUpgradeCmd.LocalFlags().Lookup("sidecar"); flag != nil {
 		t.Fatal("batch upgrade must inherit --sidecar from batch")
+	}
+	for _, name := range []string{"worker", "ignore-error", "quiet"} {
+		if flag := batchUpgradeCmd.Flags().Lookup(name); flag == nil {
+			t.Fatalf("batch upgrade --%s flag is not registered", name)
+		}
+	}
+	if flag := batchUpgradeCmd.Flags().Lookup("quiet"); flag.DefValue != "false" {
+		t.Fatalf("batch upgrade --quiet default = %q, want false", flag.DefValue)
 	}
 }
