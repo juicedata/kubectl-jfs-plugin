@@ -170,12 +170,17 @@ func collectSidecarUpgradeDiffs(pod *corev1.Pod, resources sidecar.TargetResourc
 		if updateArgs && !updateBinary && !jUtil.ImageSupportSidecarRestartArgs(container.Image) {
 			continue
 		}
+		currentMountArgs := mountArgs(currentCmd)
+		targetMountArgs := mountArgs(target.Cmd)
+		if target.IsCE && cmdKnown {
+			targetMountArgs = currentMountArgs
+		}
 		key := (&jConfig.UpgradeTarget{Namespace: pod.Namespace, Name: pod.Name, ContainerName: container.Name}).Key()
 		diffs[key] = jConfig.SidecarUpgradeDiff{
 			CurrentImage:     currentImage,
 			TargetImage:      target.Image,
-			CurrentMountArgs: mountArgs(currentCmd),
-			TargetMountArgs:  mountArgs(target.Cmd),
+			CurrentMountArgs: currentMountArgs,
+			TargetMountArgs:  targetMountArgs,
 		}
 	}
 	return diffs, nil

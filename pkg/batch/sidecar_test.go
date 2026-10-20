@@ -157,7 +157,7 @@ func TestResolveSidecarUpgradeTargetsArgumentsOnlyEligibilityAndIdentity(t *test
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pod, resources := newEESidecarFixture(t, tt.containerImage, tt.effectiveImage, []string{"/sbin/mount.juicefs", "stale"})
+			pod, resources := newSidecarFixture(t, tt.containerImage, tt.effectiveImage, []string{"/sbin/mount.juicefs", "stale"}, false)
 			eligible, skipped, err := resolveSidecarUpgradeTargets([]corev1.Pod{*pod}, resources)
 			if err != nil {
 				t.Fatalf("resolveSidecarUpgradeTargets() error = %v", err)
@@ -191,10 +191,10 @@ func TestResolveSidecarUpgradeTargetsArgumentsOnlyEligibilityAndIdentity(t *test
 
 func TestCollectSidecarUpgradeDiffs(t *testing.T) {
 	oldConfig := jConfig.GlobalConfig
-	jConfig.GlobalConfig = &jConfig.Config{MountPodPatch: []jConfig.MountPodPatch{{EEMountImage: "juicedata/mount:ee-5.4.3"}}}
+	jConfig.GlobalConfig = &jConfig.Config{MountPodPatch: []jConfig.MountPodPatch{{CEMountImage: "juicedata/mount:ce-1.3.0", EEMountImage: "juicedata/mount:ee-5.4.3"}}}
 	t.Cleanup(func() { jConfig.GlobalConfig = oldConfig })
 
-	basePod, resources := newEESidecarFixture(t, "juicedata/mount:ee-5.4.3", "juicedata/mount:ee-5.4.3", []string{"stale"})
+	basePod, resources := newSidecarFixture(t, "juicedata/mount:ee-5.4.3", "juicedata/mount:ee-5.4.3", []string{"stale"}, false)
 	target, err := sidecar.ResolveTargetStateFromObjects(basePod, common.MountContainerName, resources)
 	if err != nil {
 		t.Fatalf("resolve target state: %v", err)
@@ -206,10 +206,12 @@ func TestCollectSidecarUpgradeDiffs(t *testing.T) {
 		containerImage   string
 		effectiveImage   string
 		effectiveCommand []string
+		isCE             bool
 		wantDiff         bool
 		wantCurrentImage string
 	}{
 		{name: "image only", containerImage: "juicedata/mount:ee-5.4.3", effectiveImage: "juicedata/mount:ee-5.3.13", effectiveCommand: target.Cmd, wantDiff: true, wantCurrentImage: "juicedata/mount:ee-5.3.13"},
+		{name: "CE image only", containerImage: "juicedata/mount:ce-1.2.0", effectiveImage: "juicedata/mount:ce-1.2.0", effectiveCommand: staleCmd, isCE: true, wantDiff: true, wantCurrentImage: "juicedata/mount:ce-1.2.0"},
 		{name: "supported arguments only", containerImage: "juicedata/mount:ee-5.4.3", effectiveImage: target.Image, effectiveCommand: staleCmd, wantDiff: true, wantCurrentImage: target.Image},
 		{name: "combined", containerImage: "juicedata/mount:ee-5.4.3", effectiveImage: "juicedata/mount:ee-5.3.13", effectiveCommand: staleCmd, wantDiff: true, wantCurrentImage: "juicedata/mount:ee-5.3.13"},
 		{name: "unsupported arguments only", containerImage: "juicedata/mount:ee-5.3.13", effectiveImage: target.Image, effectiveCommand: staleCmd},
@@ -217,7 +219,7 @@ func TestCollectSidecarUpgradeDiffs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pod, resources := newEESidecarFixture(t, tt.containerImage, tt.effectiveImage, tt.effectiveCommand)
+			pod, resources := newSidecarFixture(t, tt.containerImage, tt.effectiveImage, tt.effectiveCommand, tt.isCE)
 			diffs, err := collectSidecarUpgradeDiffs(pod, resources)
 			if err != nil {
 				t.Fatalf("collectSidecarUpgradeDiffs() error = %v", err)
@@ -233,11 +235,17 @@ func TestCollectSidecarUpgradeDiffs(t *testing.T) {
 			if !ok {
 				t.Fatalf("diff key %q missing from %#v", key, diffs)
 			}
-			if diff.CurrentImage != tt.wantCurrentImage || diff.TargetImage != target.Image {
+			wantTargetImage := target.Image
+			wantTargetArgs := target.Cmd[1:]
+			if tt.isCE {
+				wantTargetImage = "juicedata/mount:ce-1.3.0"
+				wantTargetArgs = tt.effectiveCommand[1:]
+			}
+			if diff.CurrentImage != tt.wantCurrentImage || diff.TargetImage != wantTargetImage {
 				t.Fatalf("image diff = %#v", diff)
 			}
-			if !reflect.DeepEqual(diff.CurrentMountArgs, tt.effectiveCommand[1:]) || !reflect.DeepEqual(diff.TargetMountArgs, target.Cmd[1:]) {
-				t.Fatalf("mount args diff = %#v, want current %#v target %#v", diff, tt.effectiveCommand[1:], target.Cmd[1:])
+			if !reflect.DeepEqual(diff.CurrentMountArgs, tt.effectiveCommand[1:]) || !reflect.DeepEqual(diff.TargetMountArgs, wantTargetArgs) {
+				t.Fatalf("mount args diff = %#v, want current %#v target %#v", diff, tt.effectiveCommand[1:], wantTargetArgs)
 			}
 		})
 	}
@@ -295,10 +303,10 @@ func TestFilterSidecarTargetsInOngoingUpgrade(t *testing.T) {
 	}
 }
 
-func newEESidecarFixture(t *testing.T, containerImage, effectiveImage string, effectiveCommand []string) (*corev1.Pod, sidecar.TargetResources) {
+func newSidecarFixture(t *testing.T, containerImage, effectiveImage string, effectiveCommand []string, isCE bool) (*corev1.Pod, sidecar.TargetResources) {
 	t.Helper()
 	setting := jConfig.JfsSetting{
-		Name: "volume", Source: "volume", VolumeId: "volume-id", UniqueId: "unique-id", UUID: "uuid",
+		Name: "volume", Source: "volume", VolumeId: "volume-id", UniqueId: "unique-id", UUID: "uuid", IsCe: isCE,
 		Envs: map[string]string{}, Configs: map[string]string{},
 		Attr: &jConfig.PodAttr{Namespace: "app", Image: containerImage, Labels: map[string]string{}, Annotations: map[string]string{}},
 	}
