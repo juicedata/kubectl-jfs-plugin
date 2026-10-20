@@ -67,18 +67,18 @@ func TestPrintSidecarPodDiff(t *testing.T) {
 	for _, want := range []string{
 		"Sidecar differences in pod [app/workload]:",
 		"CONTAINER",
-		"CURRENT IMAGE",
-		"TARGET IMAGE",
-		"CURRENT MOUNT ARGS",
-		"TARGET MOUNT ARGS",
+		"IMAGE",
+		"MOUNT ARGS",
 		"jfs-mount",
-		"registry.example/mount:v1",
-		"registry.example/mount:v2",
-		`["volume","/jfs/old","--cache-dir","/path with space"]`,
-		`["volume","/jfs/new","--cache-dir","/new path"]`,
+		"registry.example/mount:v",
+		`["volume","/jfs/`,
+		"\x1b[31m1\x1b[0m",
+		"\x1b[32m2\x1b[0m",
+		"\x1b[31mold\x1b[0m",
+		"\x1b[32mnew\x1b[0m",
 	} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("output missing %q: %s", want, out)
+			t.Fatalf("output missing %q: %q", want, out)
 		}
 	}
 

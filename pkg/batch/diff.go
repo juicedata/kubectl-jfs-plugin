@@ -29,6 +29,7 @@ import (
 	"github.com/juicedata/juicefs-csi-driver/pkg/dashboard"
 	"github.com/juicedata/juicefs-csi-driver/pkg/k8sclient"
 	"github.com/juicedata/juicefs-csi-driver/pkg/util/resource"
+	"github.com/sergi/go-diff/diffmatchpatch"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -313,18 +314,20 @@ func printSidecarPodDiff(namespace, podName string, diffs map[string]jConfig.Sid
 	}
 	sort.Strings(keys)
 
-	return util.TabbedString(func(out io.Writer) error {
-		w := kdescribe.NewPrefixWriter(out)
-		w.Write(kdescribe.LEVEL_0, "Sidecar differences in pod [%s/%s]:\n", namespace, podName)
-		w.Write(kdescribe.LEVEL_0, "CONTAINER\tCURRENT IMAGE\tTARGET IMAGE\tCURRENT MOUNT ARGS\tTARGET MOUNT ARGS\n")
-		prefix := namespace + "/" + podName + "/"
-		for _, key := range keys {
-			diff := diffs[key]
-			containerName := strings.TrimPrefix(key, prefix)
-			w.Write(kdescribe.LEVEL_0, "%s\t%s\t%s\t%s\t%s\n", containerName, diff.CurrentImage, diff.TargetImage, formatMountArgs(diff.CurrentMountArgs), formatMountArgs(diff.TargetMountArgs))
-		}
-		return nil
-	})
+	var current, target strings.Builder
+	current.WriteString("CONTAINER\tIMAGE\tMOUNT ARGS\n")
+	target.WriteString("CONTAINER\tIMAGE\tMOUNT ARGS\n")
+	prefix := namespace + "/" + podName + "/"
+	for _, key := range keys {
+		diff := diffs[key]
+		containerName := strings.TrimPrefix(key, prefix)
+		fmt.Fprintf(&current, "%s\t%s\t%s\n", containerName, diff.CurrentImage, formatMountArgs(diff.CurrentMountArgs))
+		fmt.Fprintf(&target, "%s\t%s\t%s\n", containerName, diff.TargetImage, formatMountArgs(diff.TargetMountArgs))
+	}
+
+	dmp := diffmatchpatch.New()
+	coloredDiff := dmp.DiffPrettyText(dmp.DiffMain(current.String(), target.String(), false))
+	return fmt.Sprintf("Sidecar differences in pod [%s/%s]:\n%s", namespace, podName, coloredDiff), nil
 }
 
 func getEnvFromDaemonSet(daemonSet *appsv1.DaemonSet, key string, defaultVal string) string {
