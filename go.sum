@@ -137,6 +137,8 @@ github.com/juicedata/juicefs-csi-driver v0.32.6-0.20260914091144-8999d2f8e9af h1
 github.com/juicedata/juicefs-csi-driver v0.32.6-0.20260914091144-8999d2f8e9af/go.mod h1:Y6WYTCHlHb4MMmm4uXvAeAUdMtwjW4YuhdFmGwXMpY0=
 github.com/juicedata/juicefs-csi-driver v0.33.1-0.20261014083607-1e36932c76fd h1:poP2+AHatedtyofMm2oekRmNw24ugllh/EpFA5r+0Ek=
 github.com/juicedata/juicefs-csi-driver v0.33.1-0.20261014083607-1e36932c76fd/go.mod h1:Y6WYTCHlHb4MMmm4uXvAeAUdMtwjW4YuhdFmGwXMpY0=
+github.com/juicedata/juicefs-csi-driver v0.33.2-0.20261026055305-3dac0f510735 h1:lJm2qORRG6fgNXDG691d7RziYYIn9ef4r6EUx9vykks=
+github.com/juicedata/juicefs-csi-driver v0.33.2-0.20261026055305-3dac0f510735/go.mod h1:Y6WYTCHlHb4MMmm4uXvAeAUdMtwjW4YuhdFmGwXMpY0=
 github.com/juicedata/juicefs-operator v0.9.0 h1:/NCfCvNqjk/dL3tC4RfSdryyeXvpMQJv0xxtdtQTx30=
 github.com/juicedata/juicefs-operator v0.9.0/go.mod h1:9tTG66FAoIw9wChum++oa3aePYlxP2r4ZCqqsEDV0xA=
 github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI2bnpBCr8=
