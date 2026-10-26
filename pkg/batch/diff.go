@@ -107,6 +107,7 @@ func (d *DiffAnalyzer) loadGlobalConfig() error {
 		return err
 	}
 	os.Setenv(config.EnvJuicefsConfigName, configName)
+	os.Setenv("SYS_NAMESPACE", config.MountNamespace)
 
 	return jConfig.LoadFromConfigMap(context.TODO(), d.k8sClient)
 }

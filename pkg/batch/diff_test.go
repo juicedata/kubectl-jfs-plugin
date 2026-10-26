@@ -17,6 +17,9 @@
 package batch
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -24,7 +27,9 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 
 	"github.com/juicedata/kubectl-jfs-plugin/pkg/config"
 )
@@ -74,6 +79,40 @@ func TestPrintSidecarPodImageDiff(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output missing %q: %s", want, out)
 		}
+	}
+}
+
+func TestNewDiffAnalyzerLoadsConfigFromMountNamespace(t *testing.T) {
+	const namespace = "juicefs-system"
+
+	t.Setenv("SYS_NAMESPACE", "")
+	t.Setenv(config.EnvJuicefsConfigName, "")
+	oldNamespace := config.MountNamespace
+	config.MountNamespace = namespace
+	t.Cleanup(func() {
+		config.MountNamespace = oldNamespace
+	})
+
+	wantPath := fmt.Sprintf("/api/v1/namespaces/%s/configmaps/%s", namespace, config.DefaultJuicefsConfigName)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != wantPath {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":%q,"namespace":%q},"data":{"config.yaml":"{}"}}`, config.DefaultJuicefsConfigName, namespace)
+	}))
+	t.Cleanup(server.Close)
+
+	restConfig := &rest.Config{Host: server.URL}
+	clientSet, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		t.Fatalf("create Kubernetes client: %v", err)
+	}
+
+	_, err = NewDiffAnalyzer(clientSet, restConfig)
+	if err != nil {
+		t.Fatalf("NewDiffAnalyzer should load config from %q: %v", namespace, err)
 	}
 }
 
