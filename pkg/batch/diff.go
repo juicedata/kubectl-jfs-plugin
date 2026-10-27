@@ -29,13 +29,12 @@ import (
 	"github.com/juicedata/juicefs-csi-driver/pkg/dashboard"
 	"github.com/juicedata/juicefs-csi-driver/pkg/k8sclient"
 	"github.com/juicedata/juicefs-csi-driver/pkg/util/resource"
+	"github.com/sergi/go-diff/diffmatchpatch"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	kdescribe "k8s.io/kubectl/pkg/describe"
@@ -265,25 +264,18 @@ func (d *DiffAnalyzer) DiffSidecarPod(namespace, podName string) error {
 	if err != nil {
 		return err
 	}
-	pvcs, err := d.clientSet.CoreV1().PersistentVolumeClaims(namespace).List(context.TODO(), metav1.ListOptions{})
+	if pod.Labels[common.InjectSidecarDone] != common.True {
+		return fmt.Errorf("pod %s/%s is not an injected JuiceFS sidecar pod", namespace, podName)
+	}
+	resources, err := loadSidecarTargetResources(context.TODO(), d.clientSet, namespace)
 	if err != nil {
 		return err
 	}
-	pvcMap := make(map[string]corev1.PersistentVolumeClaim, len(pvcs.Items))
-	for _, pvc := range pvcs.Items {
-		pvcMap[pvc.Name] = pvc
-	}
-	secretSelector := labels.SelectorFromSet(map[string]string{common.JuicefsSecretLabelKey: common.True})
-	secrets, err := d.clientSet.CoreV1().Secrets(namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: secretSelector.String()})
+	diffs, err := collectSidecarUpgradeDiffs(pod, resources)
 	if err != nil {
 		return err
 	}
-	secretMap := make(map[types.NamespacedName]corev1.Secret, len(secrets.Items))
-	for _, secret := range secrets.Items {
-		secretMap[types.NamespacedName{Name: secret.Name, Namespace: secret.Namespace}] = secret
-	}
-
-	out, err := printSidecarPodImageDiff(namespace, podName, jConfig.CollectSidecarImageDiffs([]corev1.Pod{*pod}, pvcMap, secretMap))
+	out, err := printSidecarPodDiff(namespace, podName, diffs)
 	if err != nil {
 		return err
 	}
@@ -313,29 +305,30 @@ func (d *DiffAnalyzer) printSidecarDiff() (string, error) {
 	})
 }
 
-func printSidecarPodImageDiff(namespace, podName string, imageDiffs map[string]jConfig.SidecarImageDiff) (string, error) {
-	keys := make([]string, 0, len(imageDiffs))
-	for key, imageDiff := range imageDiffs {
-		if imageDiff.TargetImage != "" && imageDiff.CurrentImage != imageDiff.TargetImage {
-			keys = append(keys, key)
-		}
+func printSidecarPodDiff(namespace, podName string, diffs map[string]jConfig.SidecarUpgradeDiff) (string, error) {
+	if len(diffs) == 0 {
+		return "", fmt.Errorf("no eligible sidecar differences found for pod %s/%s", namespace, podName)
 	}
-	if len(keys) == 0 {
-		return "", fmt.Errorf("no sidecar image differences found for pod %s/%s", namespace, podName)
+	keys := make([]string, 0, len(diffs))
+	for key := range diffs {
+		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 
-	return util.TabbedString(func(out io.Writer) error {
-		w := kdescribe.NewPrefixWriter(out)
-		w.Write(kdescribe.LEVEL_0, "Image diff of sidecars in pod [%s/%s]:\n", namespace, podName)
-		w.Write(kdescribe.LEVEL_0, "CONTAINER\tCURRENT IMAGE\tTARGET IMAGE\n")
-		for _, key := range keys {
-			imageDiff := imageDiffs[key]
-			containerName := strings.TrimPrefix(key, podName+"/")
-			w.Write(kdescribe.LEVEL_0, "%s\t%s\t%s\n", containerName, imageDiff.CurrentImage, imageDiff.TargetImage)
-		}
-		return nil
-	})
+	var current, target strings.Builder
+	current.WriteString("CONTAINER\tIMAGE\tMOUNT ARGS\n")
+	target.WriteString("CONTAINER\tIMAGE\tMOUNT ARGS\n")
+	prefix := namespace + "/" + podName + "/"
+	for _, key := range keys {
+		diff := diffs[key]
+		containerName := strings.TrimPrefix(key, prefix)
+		fmt.Fprintf(&current, "%s\t%s\t%s\n", containerName, diff.CurrentImage, formatMountArgs(diff.CurrentMountArgs))
+		fmt.Fprintf(&target, "%s\t%s\t%s\n", containerName, diff.TargetImage, formatMountArgs(diff.TargetMountArgs))
+	}
+
+	dmp := diffmatchpatch.New()
+	coloredDiff := dmp.DiffPrettyText(dmp.DiffMain(current.String(), target.String(), false))
+	return fmt.Sprintf("Sidecar differences in pod [%s/%s]:\n%s", namespace, podName, coloredDiff), nil
 }
 
 func getEnvFromDaemonSet(daemonSet *appsv1.DaemonSet, key string, defaultVal string) string {

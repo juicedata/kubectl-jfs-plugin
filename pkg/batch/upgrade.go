@@ -23,16 +23,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/juicedata/juicefs-csi-driver/pkg/common"
 	jConfig "github.com/juicedata/juicefs-csi-driver/pkg/config"
 	"github.com/juicedata/juicefs-csi-driver/pkg/dashboard"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/juicedata/kubectl-jfs-plugin/pkg/config"
 	"github.com/juicedata/kubectl-jfs-plugin/pkg/util"
@@ -159,37 +155,16 @@ func (d *DiffAnalyzer) newSidecarUpgradeJob(opts UpgradeOptions) error {
 }
 
 func (d *DiffAnalyzer) listSidecarUpgradeTargets(ctx context.Context, namespace, nodeName string) ([]jConfig.UpgradeTarget, error) {
-	podSelector := labels.SelectorFromSet(map[string]string{common.InjectSidecarDone: common.True})
-	podOptions := metav1.ListOptions{LabelSelector: podSelector.String()}
-	if nodeName != "" {
-		podOptions.FieldSelector = fields.OneTermEqualSelector("spec.nodeName", nodeName).String()
-	}
-	pods, err := d.clientSet.CoreV1().Pods(namespace).List(ctx, podOptions)
+	pods, err := listSidecarPods(ctx, d.clientSet, namespace, nodeName)
 	if err != nil {
 		return nil, err
 	}
-
-	pvcs, err := d.clientSet.CoreV1().PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{})
+	resources, err := loadSidecarTargetResources(ctx, d.clientSet, namespace)
 	if err != nil {
 		return nil, err
 	}
-	pvcMap := make(map[string]corev1.PersistentVolumeClaim, len(pvcs.Items))
-	for _, pvc := range pvcs.Items {
-		pvcMap[pvc.Name] = pvc
-	}
-
-	secretSelector := labels.SelectorFromSet(map[string]string{common.JuicefsSecretLabelKey: common.True})
-	secrets, err := d.clientSet.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{LabelSelector: secretSelector.String()})
-	if err != nil {
-		return nil, err
-	}
-	secretMap := make(map[types.NamespacedName]corev1.Secret, len(secrets.Items))
-	for _, secret := range secrets.Items {
-		secretMap[types.NamespacedName{Name: secret.Name, Namespace: secret.Namespace}] = secret
-	}
-
-	targets, _, err := jConfig.SelectSidecarUpgradeTargets(pods.Items, pvcMap, secretMap)
-	return targets, err
+	eligible, _, err := resolveSidecarUpgradeTargets(pods, resources)
+	return eligible, err
 }
 
 func (d *DiffAnalyzer) createUpgradeJob(batchConfig *jConfig.BatchConfig, jobName, cmName string) (*batchv1.Job, error) {
